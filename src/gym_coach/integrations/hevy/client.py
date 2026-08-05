@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any, TypeVar
 
@@ -37,9 +38,15 @@ class HevyClient:
         *,
         base_url: str = "https://api.hevyapp.com",
         timeout_seconds: float = 15.0,
+        retry_attempts: int = 3,
+        retry_backoff_seconds: float = 0.5,
         raw_store: RawResponseStore | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        if retry_attempts < 1:
+            raise ValueError("retry_attempts must be at least 1")
+        if retry_backoff_seconds < 0:
+            raise ValueError("retry_backoff_seconds cannot be negative")
         secret = api_key.get_secret_value() if isinstance(api_key, SecretStr) else api_key
         self._owns_http_client = http_client is None
         self._http = http_client or httpx.AsyncClient(
@@ -48,6 +55,8 @@ class HevyClient:
             timeout=httpx.Timeout(timeout_seconds),
         )
         self._raw_store = raw_store
+        self._retry_attempts = retry_attempts
+        self._retry_backoff_seconds = retry_backoff_seconds
 
     async def __aenter__(self) -> "HevyClient":
         return self
@@ -67,12 +76,26 @@ class HevyClient:
         resource: str,
         params: dict[str, int] | None = None,
     ) -> ModelT:
-        try:
-            response = await self._http.get(path, params=params)
-        except httpx.TimeoutException as exc:
-            raise HevyTimeoutError("Hevy request timed out") from exc
-        except httpx.RequestError as exc:
-            raise HevyTransportError("Could not communicate with Hevy") from exc
+        response: httpx.Response | None = None
+        for attempt in range(self._retry_attempts):
+            try:
+                response = await self._http.get(path, params=params)
+            except httpx.TimeoutException as exc:
+                if attempt + 1 == self._retry_attempts:
+                    raise HevyTimeoutError("Hevy request timed out") from exc
+                await self._retry_delay(attempt)
+                continue
+            except httpx.RequestError as exc:
+                if attempt + 1 == self._retry_attempts:
+                    raise HevyTransportError("Could not communicate with Hevy") from exc
+                await self._retry_delay(attempt)
+                continue
+            if response.status_code not in {429, 500, 502, 503, 504}:
+                break
+            if attempt + 1 < self._retry_attempts:
+                await self._retry_delay(attempt)
+        if response is None:  # pragma: no cover - loop always runs after validated configuration
+            raise HevyTransportError("Could not communicate with Hevy")
 
         if response.is_error:
             message = self._safe_http_message(response.status_code)
@@ -90,6 +113,9 @@ class HevyClient:
                 "Hevy response did not match its expected schema: "
                 f"{sanitized_validation_details(exc)}"
             ) from exc
+
+    async def _retry_delay(self, attempt: int) -> None:
+        await asyncio.sleep(self._retry_backoff_seconds * (2**attempt))
 
     @staticmethod
     def _safe_http_message(status_code: int) -> str:
@@ -125,6 +151,9 @@ class HevyClient:
             if len(workouts) >= limit:
                 break
         return workouts[:limit]
+
+    async def get_all_workouts(self) -> list[Workout]:
+        return [item async for page in self.iter_workout_pages() for item in page.workouts]
 
     async def iter_exercise_template_pages(
         self, *, page_size: int = 100

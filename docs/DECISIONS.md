@@ -1,5 +1,33 @@
 # Registro de decisiones
 
+## 2026-08-05 — Entrenador estructurado sobre OpenAI Responses
+
+- **Decisión:** usar PydanticAI con OpenAI Responses, `gpt-5.6-terra` configurable y razonamiento
+  medio por defecto.
+- **Motivo:** el caso es conversacional y repetido; Terra equilibra capacidad, latencia y coste,
+  mientras la Responses API y PydanticAI aportan salida estructurada.
+- **Alternativas:** modelo Sol por defecto; llamadas OpenAI directas; proveedor fijo en código.
+- **Consecuencias:** el modelo puede cambiarse por entorno y los tests lo sustituyen sin red; una
+  ejecución real requiere `OPENAI_API_KEY` local.
+
+## 2026-08-05 — Contexto mínimo y sin transcripciones persistidas
+
+- **Decisión:** enviar petición actual, perfil, objetivos, rutinas sin notas y métricas; no guardar
+  prompts, respuestas brutas ni historial completo.
+- **Motivo:** es suficiente para revisar/generar planes y reduce exposición de datos personales.
+- **Alternativas:** enviar payloads Hevy completos; usar conversaciones durables del proveedor;
+  conservar todos los mensajes localmente.
+- **Consecuencias:** privacidad y auditoría más simples; la continuidad conversacional rica queda
+  pendiente de un diseño de resúmenes consentidos.
+
+## 2026-08-05 — Aprobación local sin efecto externo
+
+- **Decisión:** las propuestas solo transitan de `draft` a `approved` o `rejected` en PostgreSQL.
+- **Motivo:** aprobar una idea y modificar una rutina externa son autoridades diferentes.
+- **Alternativas:** aplicar al aprobar; añadir ya un estado `applied`; no persistir decisiones.
+- **Consecuencias:** no existe ruta técnica de escritura Hevy en este hito; una aplicación futura
+  necesitará previsualización y una aprobación explícita adicional.
+
 ## 2026-08-05 — Adaptar el usuario al sobre `data`
 
 - **Decisión:** modelar `/v1/user/info` como `{"data": UserInfo}` y mantener campos extra.
@@ -43,3 +71,59 @@
 - **Alternativas:** aceptar el diagnóstico del sandbox; cambiar grupos o permisos del socket.
 - **Consecuencias:** Docker queda verificado sin mutaciones globales; futuras comprobaciones del
   daemon necesitarán permiso escalado del ejecutor.
+
+## 2026-08-05 — Sincronización mediante instantánea completa
+
+- **Decisión:** descargar completamente usuario, plantillas, rutinas y entrenamientos antes de
+  aplicar una única transacción PostgreSQL.
+- **Motivo:** solo una instantánea completa permite interpretar ausencias como borrados sin falsos
+  positivos por páginas o descargas fallidas.
+- **Alternativas:** usar únicamente eventos de Hevy; persistir página a página; limitar históricos.
+- **Consecuencias:** semántica simple y recuperable a cambio de más llamadas. Los hashes hacen
+  incremental la escritura y una futura fase podrá adoptar eventos conservando el repositorio.
+
+## 2026-08-05 — Hijos normalizados y reemplazo atómico al cambiar
+
+- **Decisión:** normalizar ejercicios y series en tablas propias; si cambia el hash del padre, sus
+  hijos se eliminan y reconstruyen dentro de la misma transacción.
+- **Motivo:** Hevy identifica establemente el padre, pero posiciones de ejercicios/series son la
+  identidad observable de los hijos.
+- **Alternativas:** JSONB embebido; upsert individual de hijos; IDs sintéticos derivados.
+- **Consecuencias:** consultas deportivas futuras son relacionales y consistentes; modificar un
+  padre reemplaza sus hijos, mientras una repetición idéntica no los toca.
+
+## 2026-08-05 — Borrado lógico vinculado a la ejecución
+
+- **Decisión:** conservar entidades ausentes con `deleted_at` y `deleted_sync_id`, y restaurarlas si
+  reaparecen.
+- **Motivo:** se requiere trazabilidad y no conviene destruir históricos por cambios del proveedor.
+- **Alternativas:** borrado físico; una tabla separada de eventos; ignorar ausencias.
+- **Consecuencias:** las consultas activas deberán filtrar `deleted_at IS NULL`; cada borrado queda
+  asociado a un `sync_run` auditable.
+
+## 2026-08-05 — Dominio conservador para volumen y e1RM
+
+- **Decisión:** calcular volumen externo solo para `weight_reps` y series `normal`; estimar 1RM con
+  Epley únicamente con carga positiva y 1-12 repeticiones.
+- **Motivo:** no se dispone de masa corporal para ejercicios asistidos/lastrados y Epley pierde
+  utilidad con repeticiones altas o modalidades temporizadas/de distancia.
+- **Alternativas:** aplicar Epley a todo; estimar masa corporal; sumar cargas parciales heterogéneas.
+- **Consecuencias:** resultados comparables y explicables, a costa de omitir modalidades que
+  necesitarán reglas específicas en el futuro.
+
+## 2026-08-05 — Redondeo decimal y cálculo bajo demanda
+
+- **Decisión:** usar `Decimal`, redondeo `ROUND_HALF_UP` a 0,01 y calcular métricas al consultar.
+- **Motivo:** garantiza reproducibilidad y el histórico actual no justifica materializaciones.
+- **Alternativas:** floats sin redondeo; tablas de métricas; vistas materializadas.
+- **Consecuencias:** no hay migración adicional ni riesgo de métricas obsoletas; si el volumen crece
+  se medirá antes de materializar.
+
+## 2026-08-05 — Adherencia y estancamiento configurables
+
+- **Decisión:** adherencia compara sesiones con un objetivo semanal en una ventana y se limita al
+  100%; estancamiento exige al menos cuatro sesiones, 14 días y menos de 2% de mejora en e1RM.
+- **Motivo:** Hevy no aporta una frecuencia planificada ni una definición universal de meseta.
+- **Alternativas:** inferir frecuencia histórica; reglas fijas ocultas; decisión del LLM.
+- **Consecuencias:** cada resultado incluye ventana, objetivo, sesiones, motivo y umbral; cambiar la
+  ventana puede cambiar legítimamente la clasificación.

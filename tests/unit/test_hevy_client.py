@@ -128,6 +128,21 @@ async def test_timeout(hevy_client: HevyClient) -> None:
         await hevy_client.get_user()
 
 
+@respx.mock
+async def test_retries_transient_http_errors(hevy_client: HevyClient) -> None:
+    route = respx.get("https://hevy.test/v1/user/info")
+    route.side_effect = [
+        httpx.Response(503),
+        httpx.Response(429),
+        httpx.Response(200, json=USER),
+    ]
+
+    user = await hevy_client.get_user()
+
+    assert user.id == "anonymous-user-id"
+    assert route.call_count == 3
+
+
 def test_owned_client_does_not_expose_key() -> None:
     client = HevyClient("super-secret")
     try:

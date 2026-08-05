@@ -14,4 +14,9 @@ async def http_client() -> AsyncIterator[httpx.AsyncClient]:
 
 @pytest.fixture
 def hevy_client(http_client: httpx.AsyncClient) -> HevyClient:
-    return HevyClient("test-placeholder", http_client=http_client)
+    return HevyClient(
+        "test-placeholder",
+        http_client=http_client,
+        retry_attempts=3,
+        retry_backoff_seconds=0,
+    )

@@ -22,8 +22,17 @@ class Settings(BaseSettings):
         alias="GYM_COACH_DATABASE_URL",
     )
     hevy_api_key: SecretStr | None = Field(default=None, alias="HEVY_API_KEY")
+    openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-5.6-terra", alias="GYM_COACH_OPENAI_MODEL")
+    openai_reasoning_effort: Literal["low", "medium", "high"] = Field(
+        default="medium", alias="GYM_COACH_OPENAI_REASONING_EFFORT"
+    )
     hevy_base_url: str = Field(default="https://api.hevyapp.com", alias="GYM_COACH_HEVY_BASE_URL")
     hevy_timeout_seconds: float = Field(default=15.0, gt=0, alias="GYM_COACH_HEVY_TIMEOUT_SECONDS")
+    hevy_retry_attempts: int = Field(default=3, ge=1, le=10, alias="GYM_COACH_HEVY_RETRY_ATTEMPTS")
+    hevy_retry_backoff_seconds: float = Field(
+        default=0.5, ge=0, le=30, alias="GYM_COACH_HEVY_RETRY_BACKOFF_SECONDS"
+    )
     raw_data_dir: Path = Field(default=Path("data/raw/hevy"), alias="GYM_COACH_RAW_DATA_DIR")
 
 

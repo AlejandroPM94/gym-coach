@@ -8,13 +8,14 @@ interpretación separada y aprobación humana antes de modificar rutinas.
 
 ## Fases
 
-1. **Base y Hevy read-only (actual):** FastAPI, CLI, PostgreSQL preparado, cliente robusto,
+1. **Base y Hevy read-only (completada):** FastAPI, CLI, cliente robusto,
    payloads raw y tests sin credenciales.
-2. **Persistencia y sincronización:** modelo normalizado, migraciones, importación idempotente,
-   cursores/eventos y trazabilidad de sincronización.
-3. **Motor deportivo:** volumen, e1RM, tendencias, adherencia y estancamientos con tests de casos.
-4. **Agente:** PydanticAI interpreta métricas y redacta propuestas justificadas; aprobación previa
-   a cualquier escritura.
+2. **Persistencia y sincronización (completada):** modelo normalizado, migraciones, instantáneas
+   idempotentes y trazabilidad de sincronización.
+3. **Motor deportivo (completada):** volumen, e1RM, tendencias, adherencia y estancamientos con
+   tests de casos.
+4. **Agente (completada):** PydanticAI interpreta métricas y redacta propuestas justificadas;
+   perfil, objetivos y decisiones se conservan sin escritura en Hevy.
 5. **Canales y datos adicionales:** Samsung Health/Health Connect, nutrición y Telegram/app propia,
    cada integración desacoplada y con consentimiento explícito.
 
@@ -30,7 +31,10 @@ interpretación separada y aprobación humana antes de modificar rutinas.
   personal y no se considera backup ni fuente de verdad.
 - La clave se mantiene como `SecretStr`, solo se usa al construir `api-key` y no aparece en repr,
   consola o logs.
-- SQLAlchemy y Alembic quedan configurados, pero el esquema de dominio se aplaza hasta diseñar la
-  sincronización idempotente; crear tablas vacías ahora generaría migraciones sin valor.
+- SQLAlchemy y Alembic gestionan el esquema normalizado, el perfil deportivo, los objetivos y las
+  propuestas del entrenador.
 - La respuesta verificada de `GET /v1/user/info` usa un sobre `data`, no `user`. Los diagnósticos
   de validación describen rutas y tipos, pero nunca reproducen valores recibidos.
+- El agente usa OpenAI Responses mediante PydanticAI, salida estructurada estricta y evidencias
+  deterministas. El modelo no dispone de herramientas de escritura y aprobar es una transición
+  local, no una aplicación en Hevy.

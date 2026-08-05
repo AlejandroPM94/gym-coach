@@ -5,6 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from gym_coach.config import get_settings
 from gym_coach.db import Base
+from gym_coach.persistence import models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
