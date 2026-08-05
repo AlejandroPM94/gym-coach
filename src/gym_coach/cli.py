@@ -29,9 +29,8 @@ async def _check(settings: Settings, _: argparse.Namespace) -> str:
 
 async def _user(settings: Settings, _: argparse.Namespace) -> str:
     async with _client(settings) as client:
-        user = await client.get_user()
-    label = user.username or user.name or user.id or "unknown user"
-    return f"Downloaded Hevy user: {label}"
+        await client.get_user()
+    return "Downloaded Hevy user information."
 
 
 async def _routines(settings: Settings, _: argparse.Namespace) -> str:

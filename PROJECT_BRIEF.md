@@ -32,4 +32,5 @@ interpretación separada y aprobación humana antes de modificar rutinas.
   consola o logs.
 - SQLAlchemy y Alembic quedan configurados, pero el esquema de dominio se aplaza hasta diseñar la
   sincronización idempotente; crear tablas vacías ahora generaría migraciones sin valor.
-
+- La respuesta verificada de `GET /v1/user/info` usa un sobre `data`, no `user`. Los diagnósticos
+  de validación describen rutas y tipos, pero nunca reproducen valores recibidos.

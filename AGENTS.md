@@ -19,4 +19,5 @@
 - Ejecuta antes de terminar: `ruff format .`, `ruff check .`, `mypy` y `pytest`.
 - Usa migraciones Alembic para cualquier cambio de esquema; no alteres tablas manualmente.
 - Documenta decisiones no obvias en `PROJECT_BRIEF.md` o como ADR cuando crezcan en alcance.
-
+- Al terminar cada hito relevante, actualiza `docs/PROJECT_STATE.md`, `docs/NEXT_STEPS.md` y
+  `docs/DECISIONS.md` para reflejar el estado verificado, el trabajo pendiente y las decisiones.

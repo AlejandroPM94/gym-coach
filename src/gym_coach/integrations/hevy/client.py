@@ -9,6 +9,7 @@ from gym_coach.integrations.hevy.errors import (
     HevyInvalidResponseError,
     HevyTimeoutError,
     HevyTransportError,
+    sanitized_validation_details,
 )
 from gym_coach.integrations.hevy.raw_store import RawResponseStore
 from gym_coach.integrations.hevy.schemas import (
@@ -86,7 +87,8 @@ class HevyClient:
             return model.model_validate(payload)
         except ValidationError as exc:
             raise HevyInvalidResponseError(
-                "Hevy response did not match its expected schema"
+                "Hevy response did not match its expected schema: "
+                f"{sanitized_validation_details(exc)}"
             ) from exc
 
     @staticmethod
@@ -101,7 +103,7 @@ class HevyClient:
 
     async def get_user(self) -> UserInfo:
         response = await self._get("/v1/user/info", UserInfoResponse, resource="user")
-        return response.user
+        return response.data
 
     async def iter_routine_pages(self, *, page_size: int = 10) -> AsyncIterator[RoutinePage]:
         async for page in self._iter_pages("/v1/routines", RoutinePage, "routines", page_size):

@@ -61,3 +61,5 @@ la persistencia normalizada. El cliente Hevy es async, inyectable y aislado; val
 traduce fallos HTTP/timeouts a errores propios y pagina explícitamente. No contiene operaciones
 de escritura. Consulta la visión y fases en `PROJECT_BRIEF.md`.
 
+El estado operativo, el trabajo priorizado y las decisiones se mantienen en
+`docs/PROJECT_STATE.md`, `docs/NEXT_STEPS.md` y `docs/DECISIONS.md`.

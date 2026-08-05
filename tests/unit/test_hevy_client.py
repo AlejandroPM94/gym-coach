@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import httpx
 import pytest
 import respx
@@ -9,7 +12,8 @@ from gym_coach.integrations.hevy.errors import (
     HevyTimeoutError,
 )
 
-USER = {"user": {"id": "user-1", "username": "athlete"}}
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "hevy"
+USER = json.loads((FIXTURES / "user_info.json").read_text(encoding="utf-8"))
 WORKOUT = {
     "id": "workout-1",
     "title": "Strength",
@@ -23,7 +27,28 @@ WORKOUT = {
 async def test_get_user(hevy_client: HevyClient) -> None:
     respx.get("https://hevy.test/v1/user/info").mock(return_value=httpx.Response(200, json=USER))
     user = await hevy_client.get_user()
-    assert user.username == "athlete"
+    assert user.id == "anonymous-user-id"
+    assert user.name == "Test Athlete"
+    assert user.url == "https://hevy.com/user/test-athlete"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"id": None, "name": None, "url": None},
+        {"id": "anonymous-user-id"},
+        {**USER["data"], "new_hevy_field": {"nested": True}},
+    ],
+)
+@respx.mock
+async def test_get_user_accepts_nullable_optional_and_extra_fields(
+    hevy_client: HevyClient, data: dict[str, object]
+) -> None:
+    respx.get("https://hevy.test/v1/user/info").mock(
+        return_value=httpx.Response(200, json={"data": data, "response_extra": True})
+    )
+    user = await hevy_client.get_user()
+    assert user.id == data.get("id")
 
 
 @respx.mock
@@ -70,8 +95,30 @@ async def test_invalid_schema(hevy_client: HevyClient) -> None:
     respx.get("https://hevy.test/v1/user/info").mock(
         return_value=httpx.Response(200, json={"unexpected": True})
     )
-    with pytest.raises(HevyInvalidResponseError, match="expected schema"):
+    with pytest.raises(HevyInvalidResponseError, match="expected schema") as raised:
         await hevy_client.get_user()
+    message = str(raised.value)
+    assert "field=data" in message
+    assert "expected=field present" in message
+    assert "received=missing" in message
+    assert "unexpected" not in message
+
+
+@respx.mock
+async def test_invalid_field_type_reports_types_without_value(
+    hevy_client: HevyClient,
+) -> None:
+    sensitive_value = "private-personal-value"
+    respx.get("https://hevy.test/v1/user/info").mock(
+        return_value=httpx.Response(200, json={"data": {"name": [sensitive_value]}})
+    )
+    with pytest.raises(HevyInvalidResponseError) as raised:
+        await hevy_client.get_user()
+    message = str(raised.value)
+    assert "field=data.name" in message
+    assert "expected=string" in message
+    assert "received=array" in message
+    assert sensitive_value not in message
 
 
 @respx.mock

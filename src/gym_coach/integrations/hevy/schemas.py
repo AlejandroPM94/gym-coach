@@ -10,23 +10,29 @@ class HevyModel(BaseModel):
 
 class UserInfo(HevyModel):
     id: str | None = None
-    username: str | None = None
     name: str | None = None
+    url: str | None = None
 
 
 class UserInfoResponse(HevyModel):
-    user: UserInfo
+    data: UserInfo
+
+
+class RepRange(HevyModel):
+    start: int
+    end: int
 
 
 class HevySet(HevyModel):
     index: int | None = None
-    set_type: str | None = None
+    set_type: str | None = Field(default=None, validation_alias="type", serialization_alias="type")
     weight_kg: float | None = None
     reps: int | None = None
     distance_meters: float | None = None
     duration_seconds: int | None = None
     rpe: float | None = None
     custom_metric: float | None = None
+    rep_range: RepRange | None = None
 
 
 class Exercise(HevyModel):
@@ -34,7 +40,8 @@ class Exercise(HevyModel):
     title: str
     notes: str | None = None
     exercise_template_id: str
-    supersets_id: int | None = None
+    superset_id: int | None = None
+    rest_seconds: int | None = None
     sets: list[HevySet] = Field(default_factory=list)
 
 
@@ -42,6 +49,7 @@ class Workout(HevyModel):
     id: str
     title: str
     description: str | None = None
+    routine_id: str | None = None
     start_time: datetime
     end_time: datetime
     updated_at: datetime | None = None
