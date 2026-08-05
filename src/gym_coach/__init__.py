@@ -1,0 +1,1 @@
+"""gym-coach application package."""
