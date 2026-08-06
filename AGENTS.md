@@ -7,8 +7,12 @@
 - Implementa métricas deportivas deterministas en Python testeable. El LLM interpreta métricas,
   nunca calcula volumen, 1RM, adherencia, progresión o estancamientos básicos.
 - Toda escritura o modificación de rutinas requiere aprobación explícita del usuario.
-- No añadas PydanticAI, OpenAI, RAG, Samsung Health, Health Connect, nutrición, Telegram o UI
-  hasta que el hito correspondiente lo solicite.
+- Hermes es el orquestador conversacional inicial y accede al backend mediante MCP; no uses su
+  memoria o skills como sustituto de PostgreSQL.
+- Mantén PydanticAI como integración experimental y opcional; no añadas funcionalidad nueva sobre
+  ella salvo que un hito lo solicite expresamente.
+- No añadas RAG, Samsung Health, Health Connect, nutrición, Telegram o UI hasta que el hito
+  correspondiente lo solicite.
 
 ## Ingeniería
 
@@ -18,6 +22,8 @@
 - Añade tests unitarios sin red para toda conducta nueva y tests de integración autocontenidos.
 - Ejecuta antes de terminar: `ruff format .`, `ruff check .`, `mypy` y `pytest`.
 - Usa migraciones Alembic para cualquier cambio de esquema; no alteres tablas manualmente.
+- Mantén los contratos MCP públicos separados de modelos Hevy y ORM; toda herramienta nueva es de
+  solo lectura hasta que exista un hito de escritura con aprobación explícita.
 - Documenta decisiones no obvias en `PROJECT_BRIEF.md` o como ADR cuando crezcan en alcance.
 - Al terminar cada hito relevante, actualiza `docs/PROJECT_STATE.md`, `docs/NEXT_STEPS.md` y
   `docs/DECISIONS.md` para reflejar el estado verificado, el trabajo pendiente y las decisiones.

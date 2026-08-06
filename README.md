@@ -7,7 +7,7 @@ deterministas y propuestas estructuradas que requieren aprobación humana.
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
-- Docker Compose (para PostgreSQL)
+- Docker Compose (para PostgreSQL; Ollama es experimental y opcional)
 - Hevy Pro y una API key para los comandos reales de sincronización
 
 ```bash
@@ -17,8 +17,9 @@ cp .env.example .env
 docker compose up -d postgres
 ```
 
-Las API keys son opcionales para arrancar la API y ejecutar tests. `HEVY_API_KEY` solo es necesaria
-para sincronizar y `OPENAI_API_KEY` solo para `coach ask`.
+`HEVY_API_KEY` solo es necesaria para comprobar o sincronizar Hevy. El servidor MCP y las consultas
+normalizadas no requieren claves de modelos. `OPENAI_API_KEY` pertenece únicamente a la integración
+PydanticAI experimental.
 
 ## Ejecución
 
@@ -35,11 +36,13 @@ uv run alembic upgrade head
 uv run gym-coach hevy sync
 uv run gym-coach metrics summary --days 28 --target-sessions 4
 uv run gym-coach metrics exercise EXERCISE_TEMPLATE_ID --days 180
+uv run gym-coach mcp
 
 uv run gym-coach coach profile-set --experience intermediate --days 4 --minutes 60 \
   --equipment "gimnasio completo"
 uv run gym-coach coach goal-add --type hypertrophy \
   --description "Ganar masa muscular manteniendo cuatro sesiones semanales" --priority 1
+# Experimental: requiere `uv sync --extra pydanticai`
 uv run gym-coach coach ask "Revisa mis rutinas y propón mejoras justificadas"
 uv run gym-coach coach proposals
 uv run gym-coach coach approve PROPOSAL_UUID
@@ -65,6 +68,7 @@ src/gym_coach/
 ├── api/                  # routers HTTP, sin lógica de proveedor
 ├── integrations/hevy/    # cliente, esquemas, errores y almacenamiento raw
 ├── coach/                # contratos, agente PydanticAI y reglas de evidencia/aprobación
+├── mcp/                  # contratos públicos y herramientas read-only para Hermes
 ├── metrics/              # cálculos deportivos deterministas
 ├── persistence/          # modelos y repositorios PostgreSQL
 ├── config.py             # configuración tipada desde .env/entorno
@@ -102,12 +106,26 @@ dominios válidos y reglas de estancamiento están documentados en `docs/METRICS
 
 ## Entrenador IA
 
-El agente usa PydanticAI y la Responses API de OpenAI. El modelo predeterminado es
-`gpt-5.6-terra`, configurable con `GYM_COACH_OPENAI_MODEL`. Recibe el perfil, los objetivos, la
-estructura mínima de las rutinas y métricas calculadas previamente; no recibe payloads raw, nombre
-de Hevy, notas de entrenamientos ni credenciales.
+Hermes es el orquestador conversacional principal inicial. Arranca `gym-coach` por `stdio`, descubre
+ocho herramientas MCP exclusivamente de lectura y recibe contratos Pydantic independientes de Hevy
+y del ORM. La instalación y configuración manual están en `docs/HERMES_SETUP.md`.
+
+La integración PydanticAI existente se conserva como extra experimental para alternativas o
+evaluaciones. Se instala con `uv sync --extra pydanticai`; admite Ollama local u OpenAI, pero no es
+necesaria para FastAPI, sincronización, métricas, perfiles ni MCP.
 
 Cada hallazgo y propuesta referencia evidencias internas. Las propuestas se guardan como
 `draft`; `coach approve` y `coach reject` solo registran la decisión en PostgreSQL y nunca escriben
 en Hevy. No se conservan prompts, conversaciones ni respuestas brutas del proveedor. Consulta el
 contrato y las limitaciones en `docs/COACH.md`.
+
+## MCP y Hermes
+
+```bash
+uv run gym-coach mcp --help
+uv run gym-coach mcp
+```
+
+El segundo comando reserva stdout para el protocolo MCP. Las herramientas leen PostgreSQL, salvo el
+chequeo explícito de conectividad Hevy. No existen herramientas de escritura. Consulta los contratos
+y el flujo manual en `docs/HERMES_SETUP.md`.

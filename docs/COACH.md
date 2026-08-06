@@ -1,4 +1,7 @@
-# Contrato del entrenador IA
+# Contrato experimental del entrenador PydanticAI
+
+Hermes mediante MCP es el orquestador conversacional principal. Esta integración se conserva como
+opción experimental y para posibles evaluaciones; no es necesaria para ejecutar el backend.
 
 ## Capacidades actuales
 
@@ -11,17 +14,18 @@
 
 ## Frontera de datos
 
-Se envían al proveedor únicamente el texto de la petición actual y un JSON mínimo con perfil,
-objetivos, rutinas sin notas y evidencias calculadas. No se envían payloads raw, nombre/URL del
-usuario Hevy, descripciones de entrenamientos, credenciales ni cabeceras. Las limitaciones físicas
-forman parte del perfil porque son necesarias para una propuesta segura y solo deben introducirse
-si el usuario acepta tratarlas mediante el proveedor configurado.
+El proveedor predeterminado es Ollama local con `gpt-oss:20b`: el texto de la petición y el contexto
+se procesan en el equipo. Si el usuario selecciona voluntariamente OpenAI, solo se envían al
+proveedor el texto actual y un JSON mínimo con perfil, objetivos, rutinas sin notas y evidencias
+calculadas. Nunca se incluyen payloads raw, nombre/URL del usuario Hevy, descripciones de
+entrenamientos, credenciales ni cabeceras. Las limitaciones físicas forman parte del perfil porque
+son necesarias para una propuesta segura.
 
 PostgreSQL conserva perfil, objetivos y la parte estructurada de las propuestas. No conserva la
 petición completa, el prompt compuesto, mensajes de razonamiento ni la respuesta bruta del modelo.
-La API de OpenAI se configura con `openai_store=false`.
-Cada ejecución limita las peticiones a tres (incluidos reintentos), la entrada a 100.000 tokens y
-la salida a 6.000 tokens, con timeout de 60 segundos.
+Cuando se usa la API de OpenAI se configura con `openai_store=false`. Cada ejecución limita las
+peticiones a tres (incluidos reintentos), la entrada a 100.000 tokens y la salida a 6.000 tokens.
+El timeout es de 300 segundos para Ollama local y 60 segundos para OpenAI.
 
 ## Evidencia y seguridad
 

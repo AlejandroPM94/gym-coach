@@ -22,11 +22,18 @@ class Settings(BaseSettings):
         alias="GYM_COACH_DATABASE_URL",
     )
     hevy_api_key: SecretStr | None = Field(default=None, alias="HEVY_API_KEY")
+    coach_provider: Literal["ollama", "openai"] = Field(
+        default="ollama", alias="GYM_COACH_PROVIDER"
+    )
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-5.6-terra", alias="GYM_COACH_OPENAI_MODEL")
     openai_reasoning_effort: Literal["low", "medium", "high"] = Field(
         default="medium", alias="GYM_COACH_OPENAI_REASONING_EFFORT"
     )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434/v1", alias="GYM_COACH_OLLAMA_BASE_URL"
+    )
+    ollama_model: str = Field(default="gpt-oss:20b", alias="GYM_COACH_OLLAMA_MODEL")
     hevy_base_url: str = Field(default="https://api.hevyapp.com", alias="GYM_COACH_HEVY_BASE_URL")
     hevy_timeout_seconds: float = Field(default=15.0, gt=0, alias="GYM_COACH_HEVY_TIMEOUT_SECONDS")
     hevy_retry_attempts: int = Field(default=3, ge=1, le=10, alias="GYM_COACH_HEVY_RETRY_ATTEMPTS")

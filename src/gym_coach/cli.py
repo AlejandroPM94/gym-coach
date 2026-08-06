@@ -10,14 +10,14 @@ from typing import Any
 from uuid import UUID
 
 from gym_coach.coach.errors import CoachError
+from gym_coach.coach.management import CoachManagementService
 from gym_coach.coach.schemas import AthleteProfileInput, TrainingGoalInput
-from gym_coach.coach.service import CoachManagementService, CoachService
 from gym_coach.config import Settings, get_settings
 from gym_coach.db import create_engine, create_session_factory
 from gym_coach.integrations.hevy.client import HevyClient
 from gym_coach.integrations.hevy.errors import HevyConfigurationError, HevyError
 from gym_coach.integrations.hevy.raw_store import RawResponseStore
-from gym_coach.integrations.openai.model import build_openai_model
+from gym_coach.mcp.server import run_stdio_server
 from gym_coach.metrics.service import MetricsError, MetricsService
 from gym_coach.metrics.types import StagnationRule
 from gym_coach.sync.hevy import HevySyncError, HevySyncService
@@ -145,12 +145,21 @@ async def _coach_goal_add(settings: Settings, args: argparse.Namespace) -> str:
 
 
 async def _coach_ask(settings: Settings, args: argparse.Namespace) -> str:
+    try:
+        from gym_coach.coach.service import CoachService
+        from gym_coach.integrations.models import build_coach_model
+    except ModuleNotFoundError as exc:
+        raise CoachError(
+            "The experimental PydanticAI coach is not installed; "
+            "run `uv sync --extra pydanticai` to enable it"
+        ) from exc
     engine = create_engine(settings.database_url)
     try:
+        configured_model = build_coach_model(settings)
         result = await CoachService(
             create_session_factory(engine),
-            model=build_openai_model(settings),
-            model_name=settings.openai_model,
+            model=configured_model.model,
+            model_name=configured_model.name,
         ).ask(args.request)
     finally:
         await engine.dispose()
@@ -203,6 +212,8 @@ Handler = Callable[[Settings, argparse.Namespace], Coroutine[Any, Any, str]]
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gym-coach")
     groups = parser.add_subparsers(dest="group", required=True)
+    mcp = groups.add_parser("mcp", help="Run the read-only MCP server over stdio")
+    mcp.set_defaults(run_mcp=True)
     hevy = groups.add_parser("hevy", help="Read-only Hevy operations")
     commands = hevy.add_subparsers(dest="command", required=True)
     handlers: dict[str, Handler] = {
@@ -268,6 +279,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _parser().parse_args()
+    if getattr(args, "run_mcp", False):
+        run_stdio_server(get_settings())
+        return
     handler: Handler = args.handler
     try:
         message: str = asyncio.run(handler(get_settings(), args))

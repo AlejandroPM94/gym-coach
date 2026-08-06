@@ -14,9 +14,11 @@ interpretación separada y aprobación humana antes de modificar rutinas.
    idempotentes y trazabilidad de sincronización.
 3. **Motor deportivo (completada):** volumen, e1RM, tendencias, adherencia y estancamientos con
    tests de casos.
-4. **Agente (completada):** PydanticAI interpreta métricas y redacta propuestas justificadas;
-   perfil, objetivos y decisiones se conservan sin escritura en Hevy.
-5. **Canales y datos adicionales:** Samsung Health/Health Connect, nutrición y Telegram/app propia,
+4. **Agente experimental (completada):** PydanticAI interpreta métricas y redacta propuestas
+   justificadas; queda conservado como extra opcional y vía de evaluación.
+5. **Hermes y MCP read-only (completada):** Hermes pasa a ser el orquestador principal y consulta
+   contratos públicos estables del backend mediante un servidor local `stdio`.
+6. **Canales y datos adicionales:** Samsung Health/Health Connect, nutrición y Telegram/app propia,
    cada integración desacoplada y con consentimiento explícito.
 
 ## Decisiones iniciales
@@ -35,6 +37,8 @@ interpretación separada y aprobación humana antes de modificar rutinas.
   propuestas del entrenador.
 - La respuesta verificada de `GET /v1/user/info` usa un sobre `data`, no `user`. Los diagnósticos
   de validación describen rutas y tipos, pero nunca reproducen valores recibidos.
-- El agente usa OpenAI Responses mediante PydanticAI, salida estructurada estricta y evidencias
-  deterministas. El modelo no dispone de herramientas de escritura y aprobar es una transición
-  local, no una aplicación en Hevy.
+- Hermes es el orquestador conversacional inicial y utiliza `gym-coach` mediante MCP `stdio`.
+  PostgreSQL conserva la verdad estructurada y Hermes no sustituye métricas ni estado con memoria.
+- PydanticAI queda como extra experimental recuperable para alternativas o evaluaciones. Ningún
+  modelo dispone de herramientas de escritura y aprobar sigue siendo una transición local, no una
+  aplicación en Hevy.

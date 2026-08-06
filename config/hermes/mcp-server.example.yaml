@@ -1,0 +1,12 @@
+# Merge this block manually into ~/.hermes/config.yaml.
+# It contains no credentials; gym-coach loads its own local .env from the project directory.
+mcp_servers:
+  gym-coach:
+    command: "uv"
+    args:
+      - "--directory"
+      - "/home/alexpm/code/gym-coach"
+      - "run"
+      - "gym-coach"
+      - "mcp"
+

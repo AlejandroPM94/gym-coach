@@ -10,17 +10,22 @@ import pytest
 import respx
 from alembic import command
 from alembic.config import Config
+from mcp import Client
 from psycopg import sql
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import func, select
 
+from gym_coach.coach.management import CoachManagementService
 from gym_coach.coach.schemas import AthleteProfileInput, TrainingGoalInput
-from gym_coach.coach.service import CoachManagementService, CoachService
-from gym_coach.config import get_settings
+from gym_coach.coach.service import CoachService
+from gym_coach.config import Settings, get_settings
 from gym_coach.db import create_engine, create_session_factory
 from gym_coach.integrations.hevy.client import HevyClient
 from gym_coach.integrations.hevy.errors import HevyHTTPError
 from gym_coach.main import create_app
+from gym_coach.mcp.repository import PostgresMCPRepository
+from gym_coach.mcp.server import create_mcp_server
+from gym_coach.mcp.tools import MCPTools
 from gym_coach.metrics.service import MetricsService
 from gym_coach.persistence.models import (
     ExerciseTemplate,
@@ -298,6 +303,31 @@ async def test_full_sync_is_idempotent_and_traces_deletions(postgres_database: s
     assert report.progress.latest_e1rm_kg == Decimal("63.33")
     assert len(reports) == 1
     assert reports[0].progress.latest_e1rm_kg == Decimal("63.33")
+
+    mcp_tools = MCPTools(
+        Settings(_env_file=None, GYM_COACH_DATABASE_URL=postgres_database),
+        PostgresMCPRepository(factory),
+        lambda: client,
+    )
+    async with Client(create_mcp_server(mcp_tools)) as mcp_client:
+        routines = await mcp_client.call_tool("list_training_routines", {})
+        routine = await mcp_client.call_tool("get_training_routine", {"routine_id": "routine-1"})
+        workouts = await mcp_client.call_tool("get_recent_workouts", {"limit": 1})
+        workout_detail = await mcp_client.call_tool("get_workout", {"workout_id": "workout-1"})
+        templates = await mcp_client.call_tool(
+            "search_exercise_templates", {"query": "press", "limit": 5}
+        )
+
+    assert routines.structured_content is not None
+    assert routines.structured_content["count"] == 1
+    assert routine.structured_content is not None
+    assert routine.structured_content["exercises"][0]["sets"][0]["reps"] == 8
+    assert workouts.structured_content is not None
+    assert workouts.structured_content["count"] == 1
+    assert workout_detail.structured_content is not None
+    assert workout_detail.structured_content["exercises"][0]["sets"][0]["weight_kg"] == "50.000"
+    assert templates.structured_content is not None
+    assert templates.structured_content["count"] == 1
 
     transport = httpx.ASGITransport(app=create_app())
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as api_client:

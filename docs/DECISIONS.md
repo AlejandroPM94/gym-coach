@@ -1,5 +1,44 @@
 # Registro de decisiones
 
+## 2026-08-06 — Hermes como orquestador mediante MCP
+
+- **Decisión:** usar inicialmente el bucle normal de Hermes con el proveedor `openai-codex` y
+  conectar `gym-coach` como servidor MCP local `stdio` exclusivamente de lectura. PostgreSQL sigue
+  siendo la fuente de verdad y PydanticAI queda como extra experimental.
+- **Motivo:** Hermes aporta conversación, memoria, skills y futuros canales sin duplicar la lógica
+  deportiva ni el estado estructurado del backend. MCP mantiene una frontera estándar y auditable.
+- **Alternativas:** ampliar PydanticAI como orquestador principal; sustituir PostgreSQL por memoria
+  de Hermes; activar Codex App-Server Runtime; integrar Hermes mediante HTTP propio.
+- **Consecuencias:** el backend expone contratos públicos estables y ninguna escritura. Hermes y su
+  autenticación se configuran manualmente fuera del repositorio. El runtime App-Server queda
+  aplazado para conservar memoria y skills en el bucle normal.
+
+## 2026-08-06 — SDK MCP v2 y prueba stdio fuera del sandbox
+
+- **Decisión:** usar `mcp>=2,<3`, su API de alto nivel `MCPServer` y transporte `stdio`; marcar la
+  prueba de subproceso como opt-in.
+- **Motivo:** v2 es la línea estable actual. El sandbox bloquea de forma reproducible el intercambio
+  stdio incluso para un servidor mínimo, mientras la misma prueba fuera del sandbox inicia, lista,
+  llama y cierra correctamente.
+- **Alternativas:** fijar la rama v1 mantenida; usar HTTP; omitir la prueba real de transporte.
+- **Consecuencias:** la suite ordinaria usa pruebas MCP en memoria y no se cuelga; la verificación
+  real se ejecuta con `GYM_COACH_RUN_MCP_STDIO_TESTS=1` fuera del sandbox.
+
+## 2026-08-06 — Modelo local gratuito como proveedor predeterminado
+
+- **Decisión:** usar Ollama con el modelo abierto de OpenAI `gpt-oss:20b` por defecto y conservar
+  OpenAI Responses como proveedor opcional seleccionado mediante entorno.
+- **Motivo:** la API key verificada no dispone de saldo y la suscripción de ChatGPT no incluye uso
+  de API. El equipo tiene una RTX 3070 de 8 GB, 16 GB de RAM y capacidad para ejecutar el modelo
+  repartido entre GPU y memoria sin enviar el perfil deportivo a terceros.
+- **Alternativas:** pagar créditos de OpenAI; Gemini gratuito, que puede usar datos del free tier
+  para mejorar productos; OpenRouter o Groq gratuitos con límites y proveedor remoto; un modelo
+  local más pequeño con menor capacidad.
+- **Consecuencias:** no hay coste por petición ni API key para el entrenador predeterminado, a
+  cambio de una descarga de unos 14 GB, más uso de RAM/GPU y mayor latencia. El nombre del proveedor
+  se conserva con cada propuesta para trazabilidad. En el equipo actual se observó un reparto
+  42% GPU/58% CPU, unos 82 s de primera carga y 14,83 s para una prueba estructurada en caliente.
+
 ## 2026-08-05 — Entrenador estructurado sobre OpenAI Responses
 
 - **Decisión:** usar PydanticAI con OpenAI Responses, `gpt-5.6-terra` configurable y razonamiento
