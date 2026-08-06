@@ -212,7 +212,7 @@ Handler = Callable[[Settings, argparse.Namespace], Coroutine[Any, Any, str]]
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gym-coach")
     groups = parser.add_subparsers(dest="group", required=True)
-    mcp = groups.add_parser("mcp", help="Run the read-only MCP server over stdio")
+    mcp = groups.add_parser("mcp", help="Run the controlled local MCP server over stdio")
     mcp.set_defaults(run_mcp=True)
     hevy = groups.add_parser("hevy", help="Read-only Hevy operations")
     commands = hevy.add_subparsers(dest="command", required=True)

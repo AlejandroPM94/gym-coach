@@ -22,8 +22,9 @@
 - Añade tests unitarios sin red para toda conducta nueva y tests de integración autocontenidos.
 - Ejecuta antes de terminar: `ruff format .`, `ruff check .`, `mypy` y `pytest`.
 - Usa migraciones Alembic para cualquier cambio de esquema; no alteres tablas manualmente.
-- Mantén los contratos MCP públicos separados de modelos Hevy y ORM; toda herramienta nueva es de
-  solo lectura hasta que exista un hito de escritura con aprobación explícita.
+- Mantén los contratos MCP públicos separados de modelos Hevy y ORM. Las escrituras locales de
+  perfil, objetivos y decisiones requieren confirmación explícita y auditoría; ninguna herramienta
+  puede escribir en Hevy hasta un hito específico con aprobación adicional.
 - Documenta decisiones no obvias en `PROJECT_BRIEF.md` o como ADR cuando crezcan en alcance.
 - Al terminar cada hito relevante, actualiza `docs/PROJECT_STATE.md`, `docs/NEXT_STEPS.md` y
   `docs/DECISIONS.md` para reflejar el estado verificado, el trabajo pendiente y las decisiones.

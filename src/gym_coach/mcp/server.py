@@ -1,5 +1,7 @@
 import asyncio
 from collections.abc import Awaitable
+from typing import Literal
+from uuid import UUID
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
@@ -12,25 +14,38 @@ from gym_coach.mcp.errors import GymCoachMCPError, InternalToolError
 from gym_coach.mcp.instructions import MCP_INSTRUCTIONS
 from gym_coach.mcp.repository import PostgresMCPRepository
 from gym_coach.mcp.schemas import (
+    AthleteProfileUpdate,
     AthleteSummary,
+    ExerciseProgressReport,
     ExerciseTemplateSearchResults,
+    GoalMutationResult,
     HevyConnectionStatus,
+    OnboardingStatus,
+    PlanDecisionResult,
+    ProfileMutationResult,
     RecentWorkouts,
     RoutineList,
     SystemStatus,
+    TrainingGoalUpdate,
+    TrainingMetrics,
+    TrainingPlanComparison,
+    TrainingPlanProposal,
+    TrainingPlanProposalInput,
     TrainingRoutine,
     TrainingWorkout,
 )
 from gym_coach.mcp.tools import MCPTools
+from gym_coach.metrics.service import MetricsService
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
+WRITE_LOCAL = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
 
 
 def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
     server: MCPServer[None] = MCPServer(
         name="gym-coach",
         title="gym-coach training backend",
-        description="Read-only access to normalized training data and backend status.",
+        description="Controlled access to normalized training data and confirmed local state.",
         instructions=MCP_INSTRUCTIONS,
         version="0.1.0",
     )
@@ -49,6 +64,38 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
     async def get_athlete_summary() -> AthleteSummary:
         """Return the minimal structured athlete profile and active goals."""
         return await _safe(tools.get_athlete_summary())
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_onboarding_status() -> OnboardingStatus:
+        """Return missing profile fields and the next safe onboarding action."""
+        return await _safe(tools.get_onboarding_status())
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def save_confirmed_athlete_profile(
+        profile: AthleteProfileUpdate, user_confirmed: Literal[True]
+    ) -> ProfileMutationResult:
+        """Save a profile only after the athlete confirms the exact structured summary."""
+        return await _safe(
+            tools.save_confirmed_athlete_profile(profile, user_confirmed=user_confirmed)
+        )
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def add_confirmed_training_goal(
+        goal: TrainingGoalUpdate, user_confirmed: Literal[True]
+    ) -> GoalMutationResult:
+        """Add a versioned goal only after the athlete confirms its structured summary."""
+        return await _safe(tools.add_confirmed_training_goal(goal, user_confirmed=user_confirmed))
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def revise_confirmed_training_goal(
+        goal_version: int,
+        goal: TrainingGoalUpdate,
+        user_confirmed: Literal[True],
+    ) -> GoalMutationResult:
+        """Archive and supersede one active goal after explicit athlete confirmation."""
+        return await _safe(
+            tools.revise_confirmed_training_goal(goal_version, goal, user_confirmed=user_confirmed)
+        )
 
     @server.tool(annotations=READ_ONLY)
     async def list_training_routines() -> RoutineList:
@@ -77,6 +124,48 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
         """Search exercise templates by name and return at most 25 matches."""
         return await _safe(tools.search_exercise_templates(query, limit))
 
+    @server.tool(annotations=READ_ONLY)
+    async def get_training_metrics(window_days: int = 28) -> TrainingMetrics:
+        """Return deterministic volume, repetitions, adherence, and stagnation metrics."""
+        return await _safe(tools.get_training_metrics(window_days))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_exercise_progress(
+        exercise_template_id: str, window_days: int = 180
+    ) -> ExerciseProgressReport:
+        """Return deterministic e1RM progression and stagnation for one exercise."""
+        return await _safe(tools.get_exercise_progress(exercise_template_id, window_days))
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def create_training_plan_proposal(
+        plan: TrainingPlanProposalInput, user_requested: Literal[True]
+    ) -> TrainingPlanProposal:
+        """Store a local draft plan requested by the athlete; never modify Hevy."""
+        return await _safe(tools.create_training_plan_proposal(plan, user_requested=user_requested))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_training_plan_proposal(proposal_id: UUID) -> TrainingPlanProposal:
+        """Return a stored local training plan proposal and its decision status."""
+        return await _safe(tools.get_training_plan_proposal(proposal_id))
+
+    @server.tool(annotations=READ_ONLY)
+    async def compare_training_plan_proposal(proposal_id: UUID) -> TrainingPlanComparison:
+        """Compare counts and rationale for a proposal and its source routine."""
+        return await _safe(tools.compare_training_plan_proposal(proposal_id))
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def decide_training_plan_proposal(
+        proposal_id: UUID,
+        decision: Literal["approved", "rejected"],
+        user_confirmed: Literal[True],
+    ) -> PlanDecisionResult:
+        """Record a confirmed local decision; never apply the proposal to Hevy."""
+        return await _safe(
+            tools.decide_training_plan_proposal(
+                proposal_id, decision, user_confirmed=user_confirmed
+            )
+        )
+
     return server
 
 
@@ -94,8 +183,14 @@ def build_mcp_tools(settings: Settings) -> tuple[MCPTools, AsyncEngine]:
             retry_backoff_seconds=settings.hevy_retry_backoff_seconds,
         )
 
-    repository = PostgresMCPRepository(create_session_factory(engine))
-    return MCPTools(settings, repository, hevy_client_factory), engine
+    session_factory = create_session_factory(engine)
+    repository = PostgresMCPRepository(session_factory)
+    return MCPTools(
+        settings,
+        repository,
+        MetricsService(session_factory),
+        hevy_client_factory,
+    ), engine
 
 
 def run_stdio_server(settings: Settings | None = None) -> None:

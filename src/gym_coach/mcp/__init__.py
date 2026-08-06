@@ -1,1 +1,1 @@
-"""Read-only Model Context Protocol boundary for gym-coach."""
+"""Controlled Model Context Protocol boundary for gym-coach."""

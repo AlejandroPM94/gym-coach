@@ -28,10 +28,13 @@ from gym_coach.mcp.server import create_mcp_server
 from gym_coach.mcp.tools import MCPTools
 from gym_coach.metrics.service import MetricsService
 from gym_coach.persistence.models import (
+    AthleteProfileVersion,
+    CoachProposal,
     ExerciseTemplate,
     HevyUser,
     Routine,
     SyncRun,
+    TrainingGoal,
     Workout,
 )
 from gym_coach.sync.hevy import HevySyncService
@@ -164,6 +167,168 @@ async def test_coach_persists_profile_goal_and_approved_draft_without_hevy_write
     assert goal.version == 1
     assert approved.status == "approved"
     assert await management.list_proposals() == [approved]
+    assert profile.version == 1
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(AthleteProfileVersion)) == 1
+        stored_goal = await session.scalar(select(TrainingGoal))
+        assert stored_goal is not None
+        assert stored_goal.user_confirmed is True
+        assert stored_goal.source == "cli"
+    await engine.dispose()
+
+
+async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
+    postgres_database: str,
+) -> None:
+    command.upgrade(_alembic_config(), "head")
+    engine = create_engine(postgres_database)
+    factory = create_session_factory(engine)
+    settings = Settings(
+        _env_file=None,
+        GYM_COACH_DATABASE_URL=postgres_database,
+        HEVY_API_KEY=None,
+    )
+    tools = MCPTools(
+        settings,
+        PostgresMCPRepository(factory),
+        MetricsService(factory),
+        lambda: HevyClient("not-used", retry_attempts=1),
+    )
+
+    async with Client(create_mcp_server(tools)) as mcp_client:
+        initial = await mcp_client.call_tool("get_onboarding_status", {})
+        rejected_profile = await mcp_client.call_tool(
+            "save_confirmed_athlete_profile",
+            {
+                "profile": {
+                    "experience_level": "intermediate",
+                    "training_days_per_week": 4,
+                },
+                "user_confirmed": False,
+            },
+        )
+        profile = await mcp_client.call_tool(
+            "save_confirmed_athlete_profile",
+            {
+                "profile": {
+                    "experience_level": "intermediate",
+                    "training_days_per_week": 4,
+                    "session_duration_minutes": 60,
+                    "equipment": ["full gym"],
+                    "limitations": [],
+                    "preferences": ["four sessions"],
+                },
+                "user_confirmed": True,
+            },
+        )
+        updated_profile = await mcp_client.call_tool(
+            "save_confirmed_athlete_profile",
+            {
+                "profile": {
+                    "experience_level": "intermediate",
+                    "training_days_per_week": 4,
+                    "session_duration_minutes": 60,
+                    "equipment": ["full gym"],
+                    "limitations": [],
+                    "preferences": ["four sessions", "balanced progression"],
+                },
+                "user_confirmed": True,
+            },
+        )
+        first_goal = await mcp_client.call_tool(
+            "add_confirmed_training_goal",
+            {
+                "goal": {
+                    "goal_type": "hypertrophy",
+                    "description": "Build muscle sustainably",
+                    "priority": 1,
+                },
+                "user_confirmed": True,
+            },
+        )
+        revised_goal = await mcp_client.call_tool(
+            "revise_confirmed_training_goal",
+            {
+                "goal_version": 1,
+                "goal": {
+                    "goal_type": "hypertrophy",
+                    "description": "Build muscle with four weekly sessions",
+                    "priority": 1,
+                },
+                "user_confirmed": True,
+            },
+        )
+        metrics = await mcp_client.call_tool("get_training_metrics", {"window_days": 28})
+        assert metrics.structured_content is not None
+        evidence_id = metrics.structured_content["evidence_id"]
+        draft = await mcp_client.call_tool(
+            "create_training_plan_proposal",
+            {
+                "plan": {
+                    "kind": "new_routine",
+                    "title": "Four-day draft",
+                    "summary": "Local draft for review",
+                    "rationale": "Matches the confirmed goal and availability",
+                    "evidence_ids": [evidence_id],
+                    "workouts": [
+                        {
+                            "title": "Upper A",
+                            "exercises": [
+                                {
+                                    "title": "Example press",
+                                    "rest_seconds": 180,
+                                    "sets": [{"reps_min": 6, "reps_max": 8}],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                "user_requested": True,
+            },
+        )
+        assert draft.structured_content is not None
+        proposal_id = draft.structured_content["proposal_id"]
+        comparison = await mcp_client.call_tool(
+            "compare_training_plan_proposal", {"proposal_id": proposal_id}
+        )
+        decision = await mcp_client.call_tool(
+            "decide_training_plan_proposal",
+            {
+                "proposal_id": proposal_id,
+                "decision": "approved",
+                "user_confirmed": True,
+            },
+        )
+
+    assert initial.structured_content is not None
+    assert initial.structured_content["ready_for_training_analysis"] is False
+    assert rejected_profile.is_error is True
+    assert profile.structured_content is not None
+    assert profile.structured_content["profile_version"] == 1
+    assert updated_profile.structured_content is not None
+    assert updated_profile.structured_content["profile_version"] == 2
+    assert first_goal.structured_content is not None
+    assert first_goal.structured_content["goal_version"] == 1
+    assert revised_goal.structured_content is not None
+    assert revised_goal.structured_content["goal_version"] == 2
+    assert comparison.structured_content is not None
+    assert comparison.structured_content["changes_are_applied"] is False
+    assert decision.structured_content is not None
+    assert decision.structured_content["status"] == "approved"
+    assert decision.structured_content["applied_to_hevy"] is False
+
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(AthleteProfileVersion)) == 2
+        goals = (await session.scalars(select(TrainingGoal).order_by(TrainingGoal.version))).all()
+        assert [item.status for item in goals] == ["archived", "active"]
+        assert all(item.user_confirmed for item in goals)
+        assert all(item.source == "hermes_mcp" for item in goals)
+        proposal = await session.scalar(select(CoachProposal))
+        assert proposal is not None
+        assert proposal.request_source == "hermes_mcp"
+        assert proposal.user_requested is True
+        assert proposal.decision_source == "hermes_mcp"
+        assert proposal.decision_user_confirmed is True
     await engine.dispose()
 
 
@@ -307,6 +472,7 @@ async def test_full_sync_is_idempotent_and_traces_deletions(postgres_database: s
     mcp_tools = MCPTools(
         Settings(_env_file=None, GYM_COACH_DATABASE_URL=postgres_database),
         PostgresMCPRepository(factory),
+        MetricsService(factory),
         lambda: client,
     )
     async with Client(create_mcp_server(mcp_tools)) as mcp_client:

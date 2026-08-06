@@ -91,8 +91,21 @@ Consulta de prueba:
 
 > Consulta mi último entrenamiento usando gym-coach y resúmelo sin proponer todavía modificaciones.
 
-Hermes debe descubrir ocho herramientas, consultar `get_recent_workouts` y después
-`get_workout`. No debe afirmar que ha modificado Hevy.
+Hermes debe descubrir 18 herramientas. Para la consulta de prueba debe usar
+`get_recent_workouts` y después `get_workout`; no debe afirmar que ha modificado Hevy.
+
+Para validar el onboarding, inicia una conversación nueva y pide configurar tu perfil. Hermes debe:
+
+1. llamar a `get_onboarding_status`;
+2. preguntar únicamente por los campos pendientes;
+3. mostrar un resumen estructurado antes de guardar;
+4. pedir confirmación explícita;
+5. llamar a `save_confirmed_athlete_profile` y después a las herramientas confirmadas de objetivos;
+6. consultar `get_training_metrics` antes de interpretar volumen, adherencia o estancamiento.
+
+La creación de un plan requiere una petición explícita del atleta y solo genera un borrador local.
+`decide_training_plan_proposal` registra una aprobación o rechazo confirmado, pero nunca escribe en
+Hevy.
 
 ## Diagnóstico
 
@@ -111,4 +124,3 @@ Hermes debe descubrir ocho herramientas, consultar `get_recent_workouts` y despu
 Hermes puede recibir imágenes si el modelo activo admite visión. `gym-coach` no recibe, almacena ni
 analiza imágenes en esta fase. Las fotografías de progreso son datos sensibles y no deben
 persistirse en el backend sin consentimiento explícito.
-

@@ -68,7 +68,7 @@ src/gym_coach/
 ├── api/                  # routers HTTP, sin lógica de proveedor
 ├── integrations/hevy/    # cliente, esquemas, errores y almacenamiento raw
 ├── coach/                # contratos, agente PydanticAI y reglas de evidencia/aprobación
-├── mcp/                  # contratos públicos y herramientas read-only para Hermes
+├── mcp/                  # contratos públicos y herramientas MCP controladas para Hermes
 ├── metrics/              # cálculos deportivos deterministas
 ├── persistence/          # modelos y repositorios PostgreSQL
 ├── config.py             # configuración tipada desde .env/entorno
@@ -107,8 +107,9 @@ dominios válidos y reglas de estancamiento están documentados en `docs/METRICS
 ## Entrenador IA
 
 Hermes es el orquestador conversacional principal inicial. Arranca `gym-coach` por `stdio`, descubre
-ocho herramientas MCP exclusivamente de lectura y recibe contratos Pydantic independientes de Hevy
-y del ORM. La instalación y configuración manual están en `docs/HERMES_SETUP.md`.
+18 herramientas MCP y recibe contratos Pydantic independientes de Hevy y del ORM. Trece son de
+lectura; las cinco mutaciones solo guardan perfil, objetivos, borradores y decisiones locales bajo
+confirmación o petición explícita. La instalación y configuración están en `docs/HERMES_SETUP.md`.
 
 La integración PydanticAI existente se conserva como extra experimental para alternativas o
 evaluaciones. Se instala con `uv sync --extra pydanticai`; admite Ollama local u OpenAI, pero no es
@@ -126,6 +127,7 @@ uv run gym-coach mcp --help
 uv run gym-coach mcp
 ```
 
-El segundo comando reserva stdout para el protocolo MCP. Las herramientas leen PostgreSQL, salvo el
-chequeo explícito de conectividad Hevy. No existen herramientas de escritura. Consulta los contratos
-y el flujo manual en `docs/HERMES_SETUP.md`.
+El segundo comando reserva stdout para el protocolo MCP. Hevy sigue siendo exclusivamente de
+lectura. Antes de guardar un perfil, objetivo o decisión, Hermes debe mostrar el resumen exacto y
+obtener confirmación explícita; aprobar una propuesta nunca la aplica en Hevy. Consulta los
+contratos y el flujo manual en `docs/HERMES_SETUP.md`.

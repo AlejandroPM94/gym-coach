@@ -19,6 +19,7 @@ from gym_coach.coach.schemas import (
 )
 from gym_coach.persistence.models import (
     AthleteProfile,
+    AthleteProfileVersion,
     CoachProposal,
     Routine,
     RoutineExercise,
@@ -30,15 +31,33 @@ class CoachRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def upsert_profile(self, data: AthleteProfileInput) -> AthleteProfileView:
+    async def upsert_profile(
+        self,
+        data: AthleteProfileInput,
+        *,
+        source: str = "cli",
+        user_confirmed: bool = True,
+    ) -> AthleteProfileView:
         profile = await self._session.scalar(
-            select(AthleteProfile).where(AthleteProfile.profile_key == "default")
+            select(AthleteProfile).where(AthleteProfile.profile_key == "default").with_for_update()
         )
         if profile is None:
-            profile = AthleteProfile(profile_key="default")
+            profile = AthleteProfile(profile_key="default", version=1)
             self._session.add(profile)
+        else:
+            profile.version += 1
         for key, value in data.model_dump().items():
             setattr(profile, key, value)
+        await self._session.flush()
+        self._session.add(
+            AthleteProfileVersion(
+                profile_id=profile.id,
+                version=profile.version,
+                profile_data=data.model_dump(mode="json"),
+                source=source,
+                user_confirmed=user_confirmed,
+            )
+        )
         await self._session.flush()
         return self._profile_view(profile)
 
@@ -48,7 +67,18 @@ class CoachRepository:
         )
         return None if profile is None else self._profile_view(profile)
 
-    async def add_goal(self, profile_id: UUID, data: TrainingGoalInput) -> TrainingGoalView:
+    async def add_goal(
+        self,
+        profile_id: UUID,
+        data: TrainingGoalInput,
+        *,
+        source: str = "cli",
+        user_confirmed: bool = True,
+        supersedes_id: UUID | None = None,
+    ) -> TrainingGoalView:
+        await self._session.scalar(
+            select(AthleteProfile.id).where(AthleteProfile.id == profile_id).with_for_update()
+        )
         current_version = await self._session.scalar(
             select(func.coalesce(func.max(TrainingGoal.version), 0)).where(
                 TrainingGoal.profile_id == profile_id
@@ -67,10 +97,45 @@ class CoachRepository:
                 else None
             ),
             status="active",
+            source=source,
+            user_confirmed=user_confirmed,
+            supersedes_id=supersedes_id,
         )
         self._session.add(goal)
         await self._session.flush()
         return self._goal_view(goal)
+
+    async def revise_goal(
+        self,
+        profile_id: UUID,
+        goal_version: int,
+        data: TrainingGoalInput,
+        *,
+        source: str,
+        user_confirmed: bool,
+    ) -> TrainingGoalView | None:
+        await self._session.scalar(
+            select(AthleteProfile.id).where(AthleteProfile.id == profile_id).with_for_update()
+        )
+        current = await self._session.scalar(
+            select(TrainingGoal)
+            .where(
+                TrainingGoal.profile_id == profile_id,
+                TrainingGoal.version == goal_version,
+                TrainingGoal.status == "active",
+            )
+            .with_for_update()
+        )
+        if current is None:
+            return None
+        current.status = "archived"
+        return await self.add_goal(
+            profile_id,
+            data,
+            source=source,
+            user_confirmed=user_confirmed,
+            supersedes_id=current.id,
+        )
 
     async def active_goals(self, profile_id: UUID) -> list[TrainingGoalView]:
         goals = (
@@ -126,6 +191,8 @@ class CoachRepository:
         proposal: CoachProposalOutput,
         evidence: list[EvidenceFact],
         model_name: str,
+        request_source: str = "pydanticai",
+        user_requested: bool = False,
     ) -> StoredProposalView:
         row = CoachProposal(
             profile_id=profile_id,
@@ -136,6 +203,8 @@ class CoachRepository:
             proposal_data=proposal.model_dump(mode="json"),
             evidence_data=[item.model_dump(mode="json") for item in evidence],
             model_name=model_name,
+            request_source=request_source,
+            user_requested=user_requested,
         )
         self._session.add(row)
         await self._session.flush()
@@ -149,7 +218,22 @@ class CoachRepository:
         ).all()
         return [self._proposal_view(item) for item in rows]
 
-    async def decide_proposal(self, proposal_id: UUID, status: str) -> StoredProposalView | None:
+    async def get_proposal(
+        self, proposal_id: UUID
+    ) -> tuple[StoredProposalView, CoachProposalOutput] | None:
+        row = await self._session.get(CoachProposal, proposal_id)
+        if row is None:
+            return None
+        return self._proposal_view(row), CoachProposalOutput.model_validate(row.proposal_data)
+
+    async def decide_proposal(
+        self,
+        proposal_id: UUID,
+        status: str,
+        *,
+        decision_source: str = "cli",
+        user_confirmed: bool = True,
+    ) -> StoredProposalView | None:
         row = await self._session.get(CoachProposal, proposal_id)
         if row is None:
             return None
@@ -157,6 +241,8 @@ class CoachRepository:
             raise ValueError("Only draft proposals can be approved or rejected")
         row.status = status
         row.decided_at = datetime.now(UTC)
+        row.decision_source = decision_source
+        row.decision_user_confirmed = user_confirmed
         await self._session.flush()
         return self._proposal_view(row)
 
@@ -165,6 +251,7 @@ class CoachRepository:
         return AthleteProfileView.model_validate(
             {
                 "id": row.id,
+                "version": row.version,
                 "experience_level": row.experience_level,
                 "training_days_per_week": row.training_days_per_week,
                 "session_duration_minutes": row.session_duration_minutes,

@@ -20,6 +20,7 @@ class AthleteProfileInput(StrictModel):
 
 class AthleteProfileView(AthleteProfileInput):
     id: UUID
+    version: int = 1
 
 
 class TrainingGoalInput(StrictModel):

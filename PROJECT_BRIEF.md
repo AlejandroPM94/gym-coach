@@ -16,9 +16,11 @@ interpretación separada y aprobación humana antes de modificar rutinas.
    tests de casos.
 4. **Agente experimental (completada):** PydanticAI interpreta métricas y redacta propuestas
    justificadas; queda conservado como extra opcional y vía de evaluación.
-5. **Hermes y MCP read-only (completada):** Hermes pasa a ser el orquestador principal y consulta
+5. **Hermes y MCP base (completada):** Hermes pasa a ser el orquestador principal y consulta
    contratos públicos estables del backend mediante un servidor local `stdio`.
-6. **Canales y datos adicionales:** Samsung Health/Health Connect, nutrición y Telegram/app propia,
+6. **Onboarding y planes locales (completada):** perfil y objetivos confirmados/versionados,
+   métricas deterministas y propuestas locales aprobables, sin escritura en Hevy.
+7. **Canales y datos adicionales:** Samsung Health/Health Connect, nutrición y Telegram/app propia,
    cada integración desacoplada y con consentimiento explícito.
 
 ## Decisiones iniciales
@@ -39,6 +41,9 @@ interpretación separada y aprobación humana antes de modificar rutinas.
   de validación describen rutas y tipos, pero nunca reproducen valores recibidos.
 - Hermes es el orquestador conversacional inicial y utiliza `gym-coach` mediante MCP `stdio`.
   PostgreSQL conserva la verdad estructurada y Hermes no sustituye métricas ni estado con memoria.
-- PydanticAI queda como extra experimental recuperable para alternativas o evaluaciones. Ningún
-  modelo dispone de herramientas de escritura y aprobar sigue siendo una transición local, no una
+- PydanticAI queda como extra experimental recuperable para alternativas o evaluaciones y no
+  dispone de herramientas de escritura. Aprobar sigue siendo una transición local, no una
   aplicación en Hevy.
+- Hermes puede persistir perfil, objetivos y decisiones mediante herramientas MCP locales que
+  exigen confirmación explícita. Las actualizaciones de perfil conservan instantáneas versionadas y
+  las revisiones de objetivos archivan la versión sustituida.

@@ -1,5 +1,29 @@
 # Registro de decisiones
 
+## 2026-08-06 — Onboarding confirmado y planes locales mediante MCP
+
+- **Decisión:** permitir cinco mutaciones MCP limitadas a perfil, objetivos, creación de borradores y
+  decisiones locales. Perfil, objetivos y decisiones exigen confirmación explícita; crear un
+  borrador exige que el atleta lo haya solicitado. Ninguna herramienta escribe en Hevy.
+- **Motivo:** el onboarding debe ocurrir naturalmente en Hermes/Telegram, pero PostgreSQL debe
+  conservar el estado estructurado y auditable en vez de depender de memoria conversacional.
+- **Alternativas:** introducir los datos mediante CLI; confiar solo en memoria de Hermes; permitir
+  escrituras directas sin confirmación; posponer cualquier persistencia hasta Telegram.
+- **Consecuencias:** el perfil conserva instantáneas versionadas, una revisión de objetivo archiva la
+  versión anterior y las decisiones sobre planes quedan registradas. La confirmación se expresa en
+  el contrato MCP y la skill prohíbe marcarla sin una respuesta afirmativa del atleta.
+
+## 2026-08-06 — Métricas y evidencias calculadas exclusivamente por gym-coach
+
+- **Decisión:** exponer resumen deportivo y progreso por ejercicio mediante MCP con límites de
+  periodo e IDs de evidencia; Hermes solo los interpreta.
+- **Motivo:** preservar resultados reproducibles y evitar cálculos deportivos variables dentro del
+  modelo conversacional.
+- **Alternativas:** enviar entrenamientos brutos y pedir cálculos a Hermes; ejecutar PydanticAI como
+  intermediario; duplicar fórmulas en la skill.
+- **Consecuencias:** volumen, repeticiones, adherencia, e1RM y estancamiento proceden del motor Python.
+  Los planes pueden citar esas evidencias, pero la comparación semántica detallada queda pendiente.
+
 ## 2026-08-06 — Hermes como orquestador mediante MCP
 
 - **Decisión:** usar inicialmente el bucle normal de Hermes con el proveedor `openai-codex` y
