@@ -99,13 +99,17 @@ Para validar el onboarding, inicia una conversación nueva y pide configurar tu 
 1. llamar a `get_onboarding_status`;
 2. preguntar únicamente por los campos pendientes;
 3. mostrar un resumen estructurado antes de guardar;
-4. pedir confirmación explícita;
-5. llamar a `save_confirmed_athlete_profile` y después a las herramientas confirmadas de objetivos;
-6. consultar `get_training_metrics` antes de interpretar volumen, adherencia o estancamiento.
+4. preguntar explícitamente por dolor/lesiones, ejercicios problemáticos y preferencias, y registrar
+   la revisión aunque la respuesta sea «ninguno»;
+5. pedir confirmación explícita;
+6. llamar a `save_confirmed_athlete_profile` y después a las herramientas confirmadas de objetivos;
+7. consultar `get_training_metrics` antes de interpretar volumen, adherencia o estancamiento.
 
 La creación de un plan requiere una petición explícita del atleta y solo genera un borrador local.
 `decide_training_plan_proposal` registra una aprobación o rechazo confirmado, pero nunca escribe en
-Hevy.
+Hevy. Cada cambio necesita una justificación y evidencias vigentes. Las sesiones opcionales deben
+marcarse como tales; planchas, cardio y otros ejercicios temporales usan duración o distancia, no
+repeticiones ficticias.
 
 ## Diagnóstico
 

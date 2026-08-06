@@ -217,6 +217,8 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
                     "equipment": ["full gym"],
                     "limitations": [],
                     "preferences": ["four sessions"],
+                    "limitations_reviewed": True,
+                    "preferences_reviewed": True,
                 },
                 "user_confirmed": True,
             },
@@ -231,6 +233,8 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
                     "equipment": ["full gym"],
                     "limitations": [],
                     "preferences": ["four sessions", "balanced progression"],
+                    "limitations_reviewed": True,
+                    "preferences_reviewed": True,
                 },
                 "user_confirmed": True,
             },
@@ -270,6 +274,12 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
                     "summary": "Local draft for review",
                     "rationale": "Matches the confirmed goal and availability",
                     "evidence_ids": [evidence_id],
+                    "changes": [
+                        {
+                            "description": "Match the confirmed weekly availability",
+                            "evidence_ids": [evidence_id],
+                        }
+                    ],
                     "workouts": [
                         {
                             "title": "Upper A",
@@ -483,6 +493,68 @@ async def test_full_sync_is_idempotent_and_traces_deletions(postgres_database: s
         templates = await mcp_client.call_tool(
             "search_exercise_templates", {"query": "press", "limit": 5}
         )
+        await mcp_client.call_tool(
+            "save_confirmed_athlete_profile",
+            {
+                "profile": {
+                    "experience_level": "intermediate",
+                    "training_days_per_week": 3,
+                    "session_duration_minutes": 60,
+                    "equipment": ["full gym"],
+                    "limitations": [],
+                    "preferences": [],
+                    "limitations_reviewed": True,
+                    "preferences_reviewed": True,
+                },
+                "user_confirmed": True,
+            },
+        )
+        plan_metrics = await mcp_client.call_tool("get_training_metrics", {"window_days": 28})
+        assert plan_metrics.structured_content is not None
+        metric_evidence = plan_metrics.structured_content["evidence_id"]
+        plan_draft = await mcp_client.call_tool(
+            "create_training_plan_proposal",
+            {
+                "plan": {
+                    "kind": "routine_update",
+                    "title": "Updated test routine",
+                    "summary": "A deterministic comparison fixture",
+                    "rationale": "Tests retained exercises and set deltas",
+                    "evidence_ids": [metric_evidence, "routine:routine-1"],
+                    "source_routine_id": "routine-1",
+                    "changes": [
+                        {
+                            "description": "Add one set to the retained press",
+                            "evidence_ids": [metric_evidence, "routine:routine-1"],
+                        }
+                    ],
+                    "workouts": [
+                        {
+                            "title": "Updated day",
+                            "location": "gym",
+                            "estimated_duration_minutes": 45,
+                            "exercises": [
+                                {
+                                    "exercise_template_external_id": "template-1",
+                                    "title": "Test Press",
+                                    "rest_seconds": 120,
+                                    "sets": [
+                                        {"reps_min": 8, "reps_max": 10},
+                                        {"reps_min": 8, "reps_max": 10},
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                "user_requested": True,
+            },
+        )
+        assert plan_draft.structured_content is not None
+        detailed_comparison = await mcp_client.call_tool(
+            "compare_training_plan_proposal",
+            {"proposal_id": plan_draft.structured_content["proposal_id"]},
+        )
 
     assert routines.structured_content is not None
     assert routines.structured_content["count"] == 1
@@ -494,6 +566,27 @@ async def test_full_sync_is_idempotent_and_traces_deletions(postgres_database: s
     assert workout_detail.structured_content["exercises"][0]["sets"][0]["weight_kg"] == "50.000"
     assert templates.structured_content is not None
     assert templates.structured_content["count"] == 1
+    assert detailed_comparison.structured_content is not None
+    assert detailed_comparison.structured_content["exercise_changes"] == [
+        {
+            "exercise_template_external_id": "template-1",
+            "title": "Test Press",
+            "change": "retained",
+            "current_frequency": 1,
+            "proposed_frequency": 1,
+            "current_sets": 1,
+            "proposed_sets": 2,
+            "set_delta": 1,
+        }
+    ]
+    assert detailed_comparison.structured_content["muscle_group_changes"] == [
+        {
+            "muscle_group": "chest",
+            "current_sets": 1,
+            "proposed_sets": 2,
+            "set_delta": 1,
+        }
+    ]
 
     transport = httpx.ASGITransport(app=create_app())
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as api_client:

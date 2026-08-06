@@ -258,6 +258,8 @@ class CoachRepository:
                 "equipment": row.equipment,
                 "limitations": row.limitations,
                 "preferences": row.preferences,
+                "limitations_reviewed": row.limitations_reviewed,
+                "preferences_reviewed": row.preferences_reviewed,
             }
         )
 

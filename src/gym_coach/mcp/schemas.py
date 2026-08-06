@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -37,6 +38,7 @@ class HevyConnectionStatus(MCPPublicModel):
 
 
 class AthleteGoal(MCPPublicModel):
+    evidence_id: EvidenceId
     version: int = Field(ge=1)
     goal_type: str
     description: str
@@ -48,6 +50,7 @@ class AthleteSummary(MCPPublicModel):
     source: Literal["athlete_profile", "hevy_sync", "none"]
     profile_complete: bool
     profile_version: int | None = None
+    profile_evidence_id: EvidenceId | None = None
     hevy_data_available: bool
     experience_level: str | None = None
     training_days_per_week: int | None = None
@@ -55,6 +58,8 @@ class AthleteSummary(MCPPublicModel):
     equipment: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     preferences: list[str] = Field(default_factory=list)
+    limitations_reviewed: bool = False
+    preferences_reviewed: bool = False
     goals: list[AthleteGoal] = Field(default_factory=list)
     pending_fields: list[str] = Field(default_factory=list)
 
@@ -66,6 +71,8 @@ class AthleteProfileUpdate(MCPPublicModel):
     equipment: list[ProfileItem] = Field(default_factory=list, max_length=50)
     limitations: list[ProfileItem] = Field(default_factory=list, max_length=20)
     preferences: list[ProfileItem] = Field(default_factory=list, max_length=30)
+    limitations_reviewed: Literal[True]
+    preferences_reviewed: Literal[True]
 
 
 class TrainingGoalUpdate(MCPPublicModel):
@@ -100,6 +107,7 @@ class GoalMutationResult(MCPPublicModel):
 
 
 class RoutineSummary(MCPPublicModel):
+    evidence_id: EvidenceId
     external_id: str
     title: str
     folder_id: int | None = None
@@ -256,15 +264,34 @@ class ExerciseProgressReport(MCPPublicModel):
 
 class ProposedPlanSet(MCPPublicModel):
     set_type: Literal["warmup", "normal", "drop", "failure"] = "normal"
-    reps_min: int = Field(ge=1, le=100)
-    reps_max: int = Field(ge=1, le=100)
+    reps_min: int | None = Field(default=None, ge=1, le=100)
+    reps_max: int | None = Field(default=None, ge=1, le=100)
+    duration_seconds_min: int | None = Field(default=None, ge=1, le=7200)
+    duration_seconds_max: int | None = Field(default=None, ge=1, le=7200)
+    distance_meters_min: Decimal | None = Field(default=None, gt=0, le=100_000)
+    distance_meters_max: Decimal | None = Field(default=None, gt=0, le=100_000)
     target_rpe: float | None = Field(default=None, ge=1, le=10)
     load_guidance: str | None = Field(default=None, max_length=300)
 
     @model_validator(mode="after")
     def validate_range(self) -> "ProposedPlanSet":
-        if self.reps_max < self.reps_min:
-            raise ValueError("reps_max must be greater than or equal to reps_min")
+        ranges = (
+            ("reps", self.reps_min, self.reps_max),
+            ("duration_seconds", self.duration_seconds_min, self.duration_seconds_max),
+            ("distance_meters", self.distance_meters_min, self.distance_meters_max),
+        )
+        selected = [
+            (name, minimum, maximum) for name, minimum, maximum in ranges if minimum or maximum
+        ]
+        if len(selected) != 1:
+            raise ValueError(
+                "exactly one of reps, duration_seconds, or distance_meters is required"
+            )
+        name, minimum, maximum = selected[0]
+        if minimum is None or maximum is None:
+            raise ValueError(f"{name}_min and {name}_max must be provided together")
+        if maximum < minimum:
+            raise ValueError(f"{name}_max must be greater than or equal to {name}_min")
         return self
 
 
@@ -279,6 +306,23 @@ class ProposedPlanExercise(MCPPublicModel):
 class ProposedPlanWorkout(MCPPublicModel):
     title: str = Field(min_length=1, max_length=255)
     exercises: list[ProposedPlanExercise] = Field(min_length=1, max_length=30)
+    optional: bool = False
+    location: Literal["gym", "home", "outdoors", "other"] = "gym"
+    estimated_duration_minutes: int | None = Field(default=None, ge=5, le=300)
+
+
+class PlanChangeJustification(MCPPublicModel):
+    description: str = Field(min_length=1, max_length=2000)
+    evidence_ids: list[EvidenceId] = Field(min_length=1, max_length=30)
+
+
+class VerifiedPlanEvidence(MCPPublicModel):
+    evidence_id: EvidenceId
+    category: Literal["profile", "goal", "routine", "metric"]
+    description: str
+    value: str
+    period_start: datetime | None = None
+    period_end: datetime | None = None
 
 
 class TrainingPlanProposalInput(MCPPublicModel):
@@ -289,6 +333,20 @@ class TrainingPlanProposalInput(MCPPublicModel):
     evidence_ids: list[EvidenceId] = Field(min_length=1, max_length=100)
     source_routine_id: str | None = Field(default=None, max_length=128)
     workouts: list[ProposedPlanWorkout] = Field(min_length=1, max_length=7)
+    changes: list[PlanChangeJustification] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_change_evidence(self) -> "TrainingPlanProposalInput":
+        global_evidence = set(self.evidence_ids)
+        missing = {
+            evidence_id
+            for change in self.changes
+            for evidence_id in change.evidence_ids
+            if evidence_id not in global_evidence
+        }
+        if missing:
+            raise ValueError("change evidence_ids must also appear in proposal evidence_ids")
+        return self
 
 
 class TrainingPlanProposal(MCPPublicModel):
@@ -303,8 +361,28 @@ class TrainingPlanProposal(MCPPublicModel):
 class PlanComparisonSide(MCPPublicModel):
     title: str
     workout_count: int = Field(ge=0)
+    required_workout_count: int = Field(ge=0)
+    optional_workout_count: int = Field(ge=0)
     exercise_count: int = Field(ge=0)
     set_count: int = Field(ge=0)
+
+
+class ExercisePlanChange(MCPPublicModel):
+    exercise_template_external_id: str
+    title: str
+    change: Literal["added", "removed", "retained"]
+    current_frequency: int = Field(ge=0)
+    proposed_frequency: int = Field(ge=0)
+    current_sets: int = Field(ge=0)
+    proposed_sets: int = Field(ge=0)
+    set_delta: int
+
+
+class MuscleGroupPlanChange(MCPPublicModel):
+    muscle_group: str
+    current_sets: int = Field(ge=0)
+    proposed_sets: int = Field(ge=0)
+    set_delta: int
 
 
 class TrainingPlanComparison(MCPPublicModel):
@@ -313,6 +391,10 @@ class TrainingPlanComparison(MCPPublicModel):
     current: PlanComparisonSide | None = None
     proposed: PlanComparisonSide
     rationale: str
+    exercise_changes: list[ExercisePlanChange]
+    muscle_group_changes: list[MuscleGroupPlanChange]
+    unmatched_current_titles: list[str]
+    unmatched_proposed_titles: list[str]
     changes_are_applied: bool = False
 
 

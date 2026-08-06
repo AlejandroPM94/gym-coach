@@ -131,3 +131,9 @@ El segundo comando reserva stdout para el protocolo MCP. Hevy sigue siendo exclu
 lectura. Antes de guardar un perfil, objetivo o decisión, Hermes debe mostrar el resumen exacto y
 obtener confirmación explícita; aprobar una propuesta nunca la aplica en Hevy. Consulta los
 contratos y el flujo manual en `docs/HERMES_SETUP.md`.
+
+El onboarding obliga a revisar explícitamente molestias/limitaciones y preferencias, incluso cuando
+la respuesta sea «ninguna». Los planes distinguen sesiones obligatorias y opcionales, ubicación,
+duración estimada y objetivos por repeticiones, tiempo o distancia. Cada cambio cita evidencias que
+el backend vuelve a calcular o validar; las comparaciones de ejercicios, series y grupos musculares
+se realizan de forma determinista en Python.

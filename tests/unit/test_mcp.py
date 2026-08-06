@@ -1,11 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal, Self
 from uuid import UUID, uuid4
 
 import pytest
 from mcp import Client
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from gym_coach.config import Settings
 from gym_coach.integrations.hevy.errors import HevyHTTPError
@@ -21,6 +21,7 @@ from gym_coach.mcp.schemas import (
     PlanComparisonSide,
     PlanDecisionResult,
     ProfileMutationResult,
+    ProposedPlanSet,
     RecentWorkouts,
     RoutineList,
     SystemStatus,
@@ -30,6 +31,7 @@ from gym_coach.mcp.schemas import (
     TrainingPlanProposalInput,
     TrainingRoutine,
     TrainingWorkout,
+    VerifiedPlanEvidence,
     WorkoutSummary,
 )
 from gym_coach.mcp.server import create_mcp_server
@@ -127,8 +129,9 @@ class FakeRepository:
         return external_id == "template-public-id"
 
     async def create_plan_proposal(
-        self, data: TrainingPlanProposalInput
+        self, data: TrainingPlanProposalInput, evidence: list[VerifiedPlanEvidence]
     ) -> TrainingPlanProposal | None:
+        assert evidence
         return TrainingPlanProposal(
             proposal_id=uuid4(),
             status="draft",
@@ -145,9 +148,18 @@ class FakeRepository:
             proposal_id=proposal_id,
             status="draft",
             proposed=PlanComparisonSide(
-                title="Draft", workout_count=1, exercise_count=1, set_count=1
+                title="Draft",
+                workout_count=1,
+                required_workout_count=1,
+                optional_workout_count=0,
+                exercise_count=1,
+                set_count=1,
             ),
             rationale="Test rationale",
+            exercise_changes=[],
+            muscle_group_changes=[],
+            unmatched_current_titles=[],
+            unmatched_proposed_titles=[],
         )
 
     async def decide_plan_proposal(
@@ -309,6 +321,8 @@ async def test_profile_and_goal_writes_require_explicit_confirmation() -> None:
         training_days_per_week=4,
         session_duration_minutes=60,
         equipment=["full gym"],
+        limitations_reviewed=True,
+        preferences_reviewed=True,
     )
     goal = TrainingGoalUpdate(
         goal_type="hypertrophy",
@@ -347,12 +361,19 @@ async def test_metrics_are_calculated_by_backend_and_bounded() -> None:
 
 async def test_plan_draft_requires_request_and_never_applies_to_hevy() -> None:
     tools, _, _ = make_tools()
+    evidence_id = f"metrics:summary:28d:{datetime.now(UTC).date().isoformat()}"
     plan = TrainingPlanProposalInput(
         kind="new_routine",
         title="Four-day plan",
         summary="A balanced draft",
         rationale="Matches the confirmed availability and goal",
-        evidence_ids=["metrics:summary:28d:2026-08-06"],
+        evidence_ids=[evidence_id],
+        changes=[
+            {
+                "description": "Distribute training across the week",
+                "evidence_ids": [evidence_id],
+            }
+        ],
         workouts=[
             {
                 "title": "Upper A",
@@ -375,6 +396,52 @@ async def test_plan_draft_requires_request_and_never_applies_to_hevy() -> None:
 
     assert proposal.status == "draft"
     assert proposal.applied_to_hevy is False
+
+    payload = plan.model_dump(mode="json")
+    payload["changes"] = []
+    with pytest.raises(ValueError, match="justify at least one change"):
+        await tools.create_training_plan_proposal(
+            TrainingPlanProposalInput.model_validate(payload), user_requested=True
+        )
+
+    stale_date = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    stale_id = f"metrics:summary:28d:{stale_date}"
+    payload["evidence_ids"] = [stale_id]
+    payload["changes"] = [{"description": "Stale evidence", "evidence_ids": [stale_id]}]
+    with pytest.raises(ValueError, match="stale"):
+        await tools.create_training_plan_proposal(
+            TrainingPlanProposalInput.model_validate(payload), user_requested=True
+        )
+
+    unknown_id = "metrics:unknown"
+    payload["evidence_ids"] = [unknown_id]
+    payload["changes"] = [{"description": "Unknown evidence", "evidence_ids": [unknown_id]}]
+    with pytest.raises(ValueError, match="unknown or unverifiable"):
+        await tools.create_training_plan_proposal(
+            TrainingPlanProposalInput.model_validate(payload), user_requested=True
+        )
+
+
+def test_plan_sets_support_exactly_one_prescription_dimension() -> None:
+    duration = ProposedPlanSet(duration_seconds_min=30, duration_seconds_max=60)
+    distance = ProposedPlanSet(
+        distance_meters_min=Decimal("500"), distance_meters_max=Decimal("1000")
+    )
+
+    assert duration.duration_seconds_max == 60
+    assert distance.distance_meters_min == Decimal("500")
+    with pytest.raises(ValidationError, match="exactly one"):
+        ProposedPlanSet(reps_min=8, reps_max=10, duration_seconds_min=30, duration_seconds_max=60)
+    with pytest.raises(ValidationError, match="provided together"):
+        ProposedPlanSet(duration_seconds_min=30)
+
+
+def test_mcp_profile_requires_explicit_safety_and_preference_review() -> None:
+    with pytest.raises(ValidationError):
+        AthleteProfileUpdate(
+            experience_level="intermediate",
+            training_days_per_week=3,
+        )
 
 
 async def test_missing_routine_and_workout_are_safe_errors() -> None:

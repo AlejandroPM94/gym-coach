@@ -203,6 +203,8 @@ class AthleteProfile(Base):
     equipment: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     limitations: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     preferences: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    limitations_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    preferences_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

@@ -1,3 +1,4 @@
+import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -35,12 +36,21 @@ from gym_coach.mcp.schemas import (
     TrainingPlanProposalInput,
     TrainingRoutine,
     TrainingWorkout,
+    VerifiedPlanEvidence,
 )
 from gym_coach.metrics.service import ExerciseReport, MetricsError
 from gym_coach.metrics.types import MetricsSummary, StagnationResult
 
 MAX_RECENT_WORKOUTS = 50
 MAX_EXERCISE_RESULTS = 25
+_DATE_PATTERN = r"\d{4}-\d{2}-\d{2}"
+_SUMMARY_EVIDENCE = re.compile(rf"metrics:summary:(?P<days>\d{{1,3}})d:{_DATE_PATTERN}")
+_EXERCISE_EVIDENCE = re.compile(
+    rf"metrics:exercise:(?P<template_id>[a-z0-9_.-]+):(?P<days>\d{{1,3}})d:{_DATE_PATTERN}"
+)
+_ROUTINE_EVIDENCE = re.compile(r"routine:(?P<routine_id>[a-z0-9_.-]+)")
+_PROFILE_EVIDENCE = re.compile(r"profile:(?P<version>\d+)")
+_GOAL_EVIDENCE = re.compile(r"goal:(?P<version>\d+)")
 
 
 class HevyStatusClient(Protocol):
@@ -84,7 +94,7 @@ class MCPReadRepository(Protocol):
     async def exercise_template_exists(self, external_id: str) -> bool: ...
 
     async def create_plan_proposal(
-        self, data: TrainingPlanProposalInput
+        self, data: TrainingPlanProposalInput, evidence: list[VerifiedPlanEvidence]
     ) -> TrainingPlanProposal | None: ...
 
     async def get_plan_proposal(self, proposal_id: UUID) -> TrainingPlanProposal | None: ...
@@ -327,12 +337,111 @@ class MCPTools:
     ) -> TrainingPlanProposal:
         if user_requested is not True:
             raise ValueError("The athlete must explicitly request a training plan proposal")
-        result = await self._database_call(lambda: self._repository.create_plan_proposal(plan))
+        if not plan.changes:
+            raise ValueError("Each proposal must justify at least one change with evidence_ids")
+        evidence = await self._resolve_plan_evidence(plan.evidence_ids)
+        result = await self._database_call(
+            lambda: self._repository.create_plan_proposal(plan, evidence)
+        )
         if result is None:
             raise ResourceNotFoundError(
                 "Athlete profile is required before creating a training plan proposal"
             )
         return result
+
+    async def _resolve_plan_evidence(self, evidence_ids: list[str]) -> list[VerifiedPlanEvidence]:
+        athlete: AthleteSummary | None = None
+        resolved: list[VerifiedPlanEvidence] = []
+        for evidence_id in dict.fromkeys(evidence_ids):
+            if match := _SUMMARY_EVIDENCE.fullmatch(evidence_id):
+                summary_metric = await self.get_training_metrics(int(match.group("days")))
+                if summary_metric.evidence_id != evidence_id:
+                    raise ValueError("metrics evidence is stale; request fresh metrics")
+                resolved.append(
+                    VerifiedPlanEvidence(
+                        evidence_id=evidence_id,
+                        category="metric",
+                        description="Deterministic training summary",
+                        value=(
+                            f"workouts={summary_metric.workouts}; "
+                            f"total_reps={summary_metric.total_reps}; "
+                            f"volume_kg_reps={summary_metric.total_volume_kg_reps}; "
+                            f"adherence_percent={summary_metric.adherence.adherence_percent}"
+                        ),
+                        period_start=summary_metric.period_start,
+                        period_end=summary_metric.period_end,
+                    )
+                )
+                continue
+            if match := _EXERCISE_EVIDENCE.fullmatch(evidence_id):
+                exercise_metric = await self.get_exercise_progress(
+                    match.group("template_id"), int(match.group("days"))
+                )
+                if exercise_metric.evidence_id != evidence_id:
+                    raise ValueError("exercise evidence is stale; request fresh progress metrics")
+                resolved.append(
+                    VerifiedPlanEvidence(
+                        evidence_id=evidence_id,
+                        category="metric",
+                        description="Deterministic exercise progress",
+                        value=(
+                            f"latest_e1rm_kg={exercise_metric.latest_e1rm_kg}; "
+                            f"change_percent={exercise_metric.e1rm_change_percent}; "
+                            f"stalled={exercise_metric.stagnation.is_stalled}; "
+                            f"reason={exercise_metric.stagnation.reason}"
+                        ),
+                        period_start=exercise_metric.period_start,
+                        period_end=exercise_metric.period_end,
+                    )
+                )
+                continue
+            if match := _ROUTINE_EVIDENCE.fullmatch(evidence_id):
+                routine = await self.get_training_routine(match.group("routine_id"))
+                resolved.append(
+                    VerifiedPlanEvidence(
+                        evidence_id=evidence_id,
+                        category="routine",
+                        description="Active synchronized training routine",
+                        value=(
+                            f"title={routine.title}; exercises={len(routine.exercises)}; "
+                            f"sets={sum(len(item.sets) for item in routine.exercises)}"
+                        ),
+                    )
+                )
+                continue
+            if athlete is None:
+                athlete = await self.get_athlete_summary()
+            if match := _PROFILE_EVIDENCE.fullmatch(evidence_id):
+                if athlete.profile_version != int(match.group("version")):
+                    raise ValueError("profile evidence does not match the current profile version")
+                resolved.append(
+                    VerifiedPlanEvidence(
+                        evidence_id=evidence_id,
+                        category="profile",
+                        description="Confirmed athlete profile version",
+                        value=f"version={athlete.profile_version}",
+                    )
+                )
+                continue
+            if match := _GOAL_EVIDENCE.fullmatch(evidence_id):
+                goal_version = int(match.group("version"))
+                goal = next((item for item in athlete.goals if item.version == goal_version), None)
+                if goal is None:
+                    raise ValueError("goal evidence does not identify an active goal")
+                resolved.append(
+                    VerifiedPlanEvidence(
+                        evidence_id=evidence_id,
+                        category="goal",
+                        description="Confirmed active training goal",
+                        value=(
+                            f"type={goal.goal_type}; priority={goal.priority}; "
+                            f"description={goal.description}"
+                        ),
+                    )
+                )
+                continue
+            raise ValueError("proposal contains an unknown or unverifiable evidence_id")
+        return resolved
 
     async def get_training_plan_proposal(self, proposal_id: UUID) -> TrainingPlanProposal:
         result = await self._database_call(lambda: self._repository.get_plan_proposal(proposal_id))

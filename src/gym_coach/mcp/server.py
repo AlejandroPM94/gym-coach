@@ -74,7 +74,7 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
     async def save_confirmed_athlete_profile(
         profile: AthleteProfileUpdate, user_confirmed: Literal[True]
     ) -> ProfileMutationResult:
-        """Save a profile only after the athlete confirms the exact structured summary."""
+        """Save a profile after explicit safety/preference review and summary confirmation."""
         return await _safe(
             tools.save_confirmed_athlete_profile(profile, user_confirmed=user_confirmed)
         )
@@ -140,7 +140,7 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
     async def create_training_plan_proposal(
         plan: TrainingPlanProposalInput, user_requested: Literal[True]
     ) -> TrainingPlanProposal:
-        """Store a local draft plan requested by the athlete; never modify Hevy."""
+        """Store a requested local draft whose individual changes cite verified evidence."""
         return await _safe(tools.create_training_plan_proposal(plan, user_requested=user_requested))
 
     @server.tool(annotations=READ_ONLY)
@@ -150,7 +150,7 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
 
     @server.tool(annotations=READ_ONLY)
     async def compare_training_plan_proposal(proposal_id: UUID) -> TrainingPlanComparison:
-        """Compare counts and rationale for a proposal and its source routine."""
+        """Compare workouts, exercises, sets, and muscle groups without applying changes."""
         return await _safe(tools.compare_training_plan_proposal(proposal_id))
 
     @server.tool(annotations=WRITE_LOCAL)

@@ -25,8 +25,15 @@ Actualizado: 2026-08-06
   instantáneas versionadas y objetivos que pueden añadirse o revisarse con confirmación explícita.
 - Métricas deterministas de resumen y progreso por ejercicio disponibles para Hermes, con IDs de
   evidencia estables para justificar propuestas.
-- Borradores locales de planes solicitados por el atleta, consulta, comparación básica y decisión
-  confirmada; ninguna operación aplica cambios en Hevy.
+- Borradores locales de planes solicitados por el atleta, consulta, comparación determinista y
+  decisión confirmada; ninguna operación aplica cambios en Hevy.
+- Revisión explícita de limitaciones y preferencias: una lista vacía ya no se confunde con un campo
+  que nunca se preguntó.
+- Planes con sesiones opcionales, ubicación, duración estimada y series prescritas por una única
+  dimensión: repeticiones, segundos o distancia.
+- Evidencias verificadas nuevamente al guardar cada propuesta y justificaciones por cambio.
+- Diff determinista de ejercicios retenidos/añadidos/eliminados, frecuencias, series y grupos
+  musculares primarios.
 - Hermes 0.20.0 instalado y configurado manualmente por el usuario; la conexión MCP, la skill y una
   consulta real de entrenamiento se verificaron de extremo a extremo.
 - PydanticAI movido a un extra experimental; la gestión de perfil, objetivos y decisiones no
@@ -38,13 +45,13 @@ Actualizado: 2026-08-06
   ejercicios verificados el 2026-08-05.
 - Contrato real de `/v1/user/info`: sobre `data` con `id`, `name` y `url`.
 - Docker Desktop y Compose funcionan sin `sudo`; PostgreSQL 17 está `healthy`, las pruebas de
-  integración pasan y la migración `a81c02b7de14` está aplicada en la base local.
+  integración pasan y la migración `c934b2e1f609` está aplicada en la base local.
 - Ollama 0.32.3 se verificó `healthy`, detectó la RTX 3070 y conservó `gpt-oss:20b` (13 GB) en un
   volumen Docker. PydanticAI obtuvo una salida estructurada real; una consulta en caliente tardó
   14,83 s antes de desaparecer la integración WSL de Docker Desktop.
 - MCP v2 verificado por transporte `stdio` real fuera del sandbox: inicio, listado de 18
   herramientas, llamada sin credenciales y cierre correcto.
-- La configuración real de Hermes volvió a probarse tras la migración: conexión en 1358 ms y 18
+- La configuración real de Hermes volvió a probarse tras la migración: conexión correcta y 18
   herramientas descubiertas.
 - Sincronización real: 1 usuario, 451 plantillas, 4 rutinas y 95 entrenamientos; una segunda
   ejecución produjo 551 elementos sin cambios y ninguna inserción, actualización o eliminación.
@@ -66,6 +73,10 @@ Actualizado: 2026-08-06
   sanitizados, ausencia de secretos, contratos públicos y ciclo `stdio` opt-in.
 - Onboarding/planes MCP: rechazo sin confirmación, versiones de perfil, revisión de objetivos,
   métricas backend, borrador solicitado, comparación y aprobación local sin escritura en Hevy.
+- Contratos robustos: revisión explícita, rechazo de prescripciones ambiguas, duración/distancia,
+  evidencia caducada o inexistente y diff PostgreSQL por ejercicio/músculo.
+- Verificación del octavo hito: 51 pruebas ordinarias pasan, seis integraciones opt-in pasan,
+  Ruff y Mypy limpios, lock vigente, migración en `head` y Alembic sin deriva.
 
 ## Problemas conocidos
 
@@ -80,8 +91,11 @@ Actualizado: 2026-08-06
   permiten un objetivo de consulta independiente.
 - e1RM y volumen excluyen por diseño peso corporal, asistencia, distancia y duración hasta disponer
   de masa corporal o reglas específicas fiables.
-- La comparación de propuestas resume sesiones, ejercicios y series; todavía no produce un diff
-  semántico ejercicio por ejercicio.
+- La distribución por grupo muscular cuenta todas las series contra el músculo primario de la
+  plantilla; no reparte series entre músculos secundarios ni estima series efectivas fraccionales.
+- El borrador creado antes de este endurecimiento sigue legible y en estado `draft`, pero no contiene
+  opcionalidad ni justificaciones estructuradas por cambio. Debe revisarse o sustituirse, no
+  aprobarse como si usara el contrato nuevo.
 - Hermes mantiene la conversación, pero `gym-coach` no conserva transcripciones. Las propuestas
   aprobadas no se aplican todavía en Hevy.
 - La clave OpenAI configurada es válida, pero la cuenta no tiene saldo de API; la suscripción a
@@ -91,5 +105,5 @@ Actualizado: 2026-08-06
 
 ## Último hito completado
 
-Séptimo hito completado: onboarding conversacional confirmado y versionado, métricas deterministas
-para Hermes y ciclo de propuestas locales, manteniendo Hevy exclusivamente de lectura.
+Octavo hito completado: onboarding de seguridad explícito, contratos de planificación tipados,
+evidencias verificadas y comparación determinista, manteniendo Hevy exclusivamente de lectura.

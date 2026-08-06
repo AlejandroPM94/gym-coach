@@ -20,7 +20,9 @@ interpretación separada y aprobación humana antes de modificar rutinas.
    contratos públicos estables del backend mediante un servidor local `stdio`.
 6. **Onboarding y planes locales (completada):** perfil y objetivos confirmados/versionados,
    métricas deterministas y propuestas locales aprobables, sin escritura en Hevy.
-7. **Canales y datos adicionales:** Samsung Health/Health Connect, nutrición y Telegram/app propia,
+7. **Contratos de planificación robustos (completada):** revisión explícita de seguridad,
+   evidencias verificadas por cambio, prescripciones tipadas y diff determinista.
+8. **Canales y datos adicionales:** Samsung Health/Health Connect, nutrición y Telegram/app propia,
    cada integración desacoplada y con consentimiento explícito.
 
 ## Decisiones iniciales
@@ -47,3 +49,5 @@ interpretación separada y aprobación humana antes de modificar rutinas.
 - Hermes puede persistir perfil, objetivos y decisiones mediante herramientas MCP locales que
   exigen confirmación explícita. Las actualizaciones de perfil conservan instantáneas versionadas y
   las revisiones de objetivos archivan la versión sustituida.
+- El backend distingue perfil no preguntado de una respuesta explícita sin limitaciones, verifica de
+  nuevo toda evidencia al crear un borrador y calcula el diff de ejercicios, series y musculatura.

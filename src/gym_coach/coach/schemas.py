@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -16,6 +17,8 @@ class AthleteProfileInput(StrictModel):
     equipment: list[str] = Field(default_factory=list, max_length=50)
     limitations: list[str] = Field(default_factory=list, max_length=20)
     preferences: list[str] = Field(default_factory=list, max_length=30)
+    limitations_reviewed: bool = False
+    preferences_reviewed: bool = False
 
 
 class AthleteProfileView(AthleteProfileInput):
@@ -81,15 +84,34 @@ class CoachFinding(StrictModel):
 
 class ProposedSet(StrictModel):
     set_type: Literal["warmup", "normal", "drop", "failure"] = "normal"
-    reps_min: Annotated[int, Field(ge=1, le=100)]
-    reps_max: Annotated[int, Field(ge=1, le=100)]
+    reps_min: Annotated[int | None, Field(ge=1, le=100)] = None
+    reps_max: Annotated[int | None, Field(ge=1, le=100)] = None
+    duration_seconds_min: Annotated[int | None, Field(ge=1, le=7200)] = None
+    duration_seconds_max: Annotated[int | None, Field(ge=1, le=7200)] = None
+    distance_meters_min: Annotated[Decimal | None, Field(gt=0, le=100_000)] = None
+    distance_meters_max: Annotated[Decimal | None, Field(gt=0, le=100_000)] = None
     target_rpe: Annotated[float | None, Field(ge=1, le=10)] = None
     load_guidance: Annotated[str | None, Field(max_length=300)] = None
 
     @model_validator(mode="after")
     def validate_range(self) -> "ProposedSet":
-        if self.reps_max < self.reps_min:
-            raise ValueError("reps_max must be greater than or equal to reps_min")
+        ranges = (
+            ("reps", self.reps_min, self.reps_max),
+            ("duration_seconds", self.duration_seconds_min, self.duration_seconds_max),
+            ("distance_meters", self.distance_meters_min, self.distance_meters_max),
+        )
+        selected = [
+            (name, minimum, maximum) for name, minimum, maximum in ranges if minimum or maximum
+        ]
+        if len(selected) != 1:
+            raise ValueError(
+                "exactly one of reps, duration_seconds, or distance_meters is required"
+            )
+        name, minimum, maximum = selected[0]
+        if minimum is None or maximum is None:
+            raise ValueError(f"{name}_min and {name}_max must be provided together")
+        if maximum < minimum:
+            raise ValueError(f"{name}_max must be greater than or equal to {name}_min")
         return self
 
 
@@ -104,6 +126,14 @@ class ProposedExercise(StrictModel):
 class ProposedWorkout(StrictModel):
     title: str
     exercises: Annotated[list[ProposedExercise], Field(min_length=1, max_length=30)]
+    optional: bool = False
+    location: Literal["gym", "home", "outdoors", "other"] = "gym"
+    estimated_duration_minutes: Annotated[int | None, Field(ge=5, le=300)] = None
+
+
+class PlanChangeJustification(StrictModel):
+    description: Annotated[str, Field(min_length=1, max_length=2000)]
+    evidence_ids: Annotated[list[str], Field(min_length=1, max_length=30)]
 
 
 class CoachProposalOutput(StrictModel):
@@ -114,6 +144,20 @@ class CoachProposalOutput(StrictModel):
     evidence_ids: Annotated[list[str], Field(min_length=1)]
     source_routine_id: str | None = None
     workouts: Annotated[list[ProposedWorkout], Field(min_length=1, max_length=7)]
+    changes: list[PlanChangeJustification] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_change_evidence(self) -> "CoachProposalOutput":
+        global_evidence = set(self.evidence_ids)
+        missing = {
+            evidence_id
+            for change in self.changes
+            for evidence_id in change.evidence_ids
+            if evidence_id not in global_evidence
+        }
+        if missing:
+            raise ValueError("change evidence_ids must also appear in proposal evidence_ids")
+        return self
 
 
 class CoachResponse(StrictModel):

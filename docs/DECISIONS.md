@@ -1,5 +1,29 @@
 # Registro de decisiones
 
+## 2026-08-06 — Seguridad explícita y planes tipados
+
+- **Decisión:** exigir que Hermes confirme haber preguntado por limitaciones y preferencias; modelar
+  sesiones opcionales, ubicación, duración y series por una sola dimensión entre repeticiones,
+  tiempo o distancia.
+- **Motivo:** una lista vacía no demostraba que se hubiera realizado el cribado y los isométricos se
+  estaban representando como repeticiones, perdiendo significado.
+- **Alternativas:** confiar en la conversación; almacenar texto libre; tratar todas las sesiones como
+  obligatorias; codificar segundos dentro de `load_guidance`.
+- **Consecuencias:** el perfil existente vuelve a estado de onboarding pendiente hasta confirmar los
+  dos apartados. Los borradores antiguos siguen legibles, pero no adquieren metadatos que nunca
+  tuvieron y deben sustituirse antes de aprobar.
+
+## 2026-08-06 — Evidencias revalidadas y diff determinista
+
+- **Decisión:** volver a resolver en el backend cada ID de evidencia al crear una propuesta, exigir
+  evidencia por cambio y comparar ejercicios, frecuencias, series y músculos primarios en Python.
+- **Motivo:** un ID declarado por el agente no prueba por sí solo que la métrica exista o siga
+  vigente, y los recuentos estructurales no deben depender del modelo conversacional.
+- **Alternativas:** confiar en IDs suministrados por Hermes; guardar todas las lecturas en un ledger;
+  dejar la comparación en texto libre; recalcular dentro de la skill.
+- **Consecuencias:** evidencias antiguas o inventadas se rechazan y deben consultarse otra vez. El
+  diff es reproducible; la distribución muscular usa por ahora solo el músculo primario.
+
 ## 2026-08-06 — Onboarding confirmado y planes locales mediante MCP
 
 - **Decisión:** permitir cinco mutaciones MCP limitadas a perfil, objetivos, creación de borradores y

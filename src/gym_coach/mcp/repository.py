@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
@@ -14,21 +15,27 @@ from gym_coach.coach.schemas import (
     ProposedWorkout,
     TrainingGoalInput,
 )
+from gym_coach.coach.schemas import (
+    PlanChangeJustification as CoachPlanChangeJustification,
+)
 from gym_coach.mcp.schemas import (
     AthleteGoal,
     AthleteProfileUpdate,
     AthleteSummary,
     CompletedExercise,
     CompletedSet,
+    ExercisePlanChange,
     ExerciseTemplateSearchResults,
     ExerciseTemplateSummary,
     GoalMutationResult,
+    MuscleGroupPlanChange,
     OnboardingStatus,
     PlanComparisonSide,
     PlanDecisionResult,
     PlannedExercise,
     PlannedSet,
     ProfileMutationResult,
+    ProposedPlanWorkout,
     RecentWorkouts,
     RoutineList,
     RoutineSummary,
@@ -38,6 +45,7 @@ from gym_coach.mcp.schemas import (
     TrainingPlanProposalInput,
     TrainingRoutine,
     TrainingWorkout,
+    VerifiedPlanEvidence,
     WorkoutSummary,
 )
 from gym_coach.persistence.coach_repository import CoachRepository
@@ -82,6 +90,8 @@ class PostgresMCPRepository:
                         "training_days_per_week",
                         "session_duration_minutes",
                         "equipment",
+                        "limitations_reviewed",
+                        "preferences_reviewed",
                         "goals",
                     ],
                 )
@@ -97,12 +107,17 @@ class PostgresMCPRepository:
                 pending.append("session_duration_minutes")
             if not profile.equipment:
                 pending.append("equipment")
+            if not profile.limitations_reviewed:
+                pending.append("limitations_reviewed")
+            if not profile.preferences_reviewed:
+                pending.append("preferences_reviewed")
             if not goals:
                 pending.append("goals")
             return AthleteSummary(
                 source="athlete_profile",
                 profile_complete=not pending,
                 profile_version=profile.version,
+                profile_evidence_id=f"profile:{profile.version}",
                 hevy_data_available=hevy_available,
                 experience_level=profile.experience_level,
                 training_days_per_week=profile.training_days_per_week,
@@ -110,8 +125,11 @@ class PostgresMCPRepository:
                 equipment=profile.equipment,
                 limitations=profile.limitations,
                 preferences=profile.preferences,
+                limitations_reviewed=profile.limitations_reviewed,
+                preferences_reviewed=profile.preferences_reviewed,
                 goals=[
                     AthleteGoal(
+                        evidence_id=f"goal:{goal.version}",
                         version=goal.version,
                         goal_type=goal.goal_type,
                         description=goal.description,
@@ -216,6 +234,7 @@ class PostgresMCPRepository:
             ).all()
         routines = [
             RoutineSummary(
+                evidence_id=f"routine:{row.external_id}",
                 external_id=row.external_id,
                 title=row.title,
                 folder_id=row.folder_id,
@@ -384,18 +403,20 @@ class PostgresMCPRepository:
             )
 
     async def create_plan_proposal(
-        self, data: TrainingPlanProposalInput
+        self, data: TrainingPlanProposalInput, evidence: list[VerifiedPlanEvidence]
     ) -> TrainingPlanProposal | None:
         await self._validate_plan_references(data)
         internal = _to_coach_proposal(data)
-        evidence = [
+        stored_evidence = [
             EvidenceFact(
-                id=evidence_id,
-                category=_evidence_category(evidence_id),
-                description="Structured evidence reference supplied through gym-coach MCP",
-                value=evidence_id,
+                id=item.evidence_id,
+                category=item.category,
+                description=item.description,
+                value=item.value,
+                period_start=item.period_start,
+                period_end=item.period_end,
             )
-            for evidence_id in data.evidence_ids
+            for item in evidence
         ]
         async with self._session_factory.begin() as session:
             repository = CoachRepository(session)
@@ -405,7 +426,7 @@ class PostgresMCPRepository:
             stored = await repository.save_proposal(
                 profile_id=profile.id,
                 proposal=internal,
-                evidence=evidence,
+                evidence=stored_evidence,
                 model_name="hermes:mcp",
                 request_source="hermes_mcp",
                 user_requested=True,
@@ -436,20 +457,37 @@ class PostgresMCPRepository:
         proposal = await self.get_plan_proposal(proposal_id)
         if proposal is None:
             return None
-        current = None
+        current_routines: list[TrainingRoutine] = []
         source_id = proposal.plan.source_routine_id
         if source_id is not None:
             routine = await self.get_routine(source_id)
             if routine is not None:
-                current = PlanComparisonSide(
-                    title=routine.title,
-                    workout_count=1,
-                    exercise_count=len(routine.exercises),
-                    set_count=sum(len(exercise.sets) for exercise in routine.exercises),
-                )
+                current_routines.append(routine)
+        else:
+            listed = await self.list_routines()
+            for summary in listed.routines:
+                routine = await self.get_routine(summary.external_id)
+                if routine is not None:
+                    current_routines.append(routine)
+        current = PlanComparisonSide(
+            title=(
+                current_routines[0].title
+                if len(current_routines) == 1
+                else "All active training routines"
+            ),
+            workout_count=len(current_routines),
+            required_workout_count=len(current_routines),
+            optional_workout_count=0,
+            exercise_count=sum(len(routine.exercises) for routine in current_routines),
+            set_count=sum(
+                len(exercise.sets) for routine in current_routines for exercise in routine.exercises
+            ),
+        )
         proposed = PlanComparisonSide(
             title=proposal.plan.title,
             workout_count=len(proposal.plan.workouts),
+            required_workout_count=sum(not workout.optional for workout in proposal.plan.workouts),
+            optional_workout_count=sum(workout.optional for workout in proposal.plan.workouts),
             exercise_count=sum(len(workout.exercises) for workout in proposal.plan.workouts),
             set_count=sum(
                 len(exercise.sets)
@@ -457,12 +495,57 @@ class PostgresMCPRepository:
                 for exercise in workout.exercises
             ),
         )
+        current_exercises = _aggregate_current_exercises(current_routines)
+        proposed_exercises, unmatched_proposed = _aggregate_proposed_exercises(
+            proposal.plan.workouts
+        )
+        template_ids = set(current_exercises) | set(proposed_exercises)
+        muscle_groups = await self._exercise_muscle_groups(template_ids)
+        exercise_changes = [
+            ExercisePlanChange(
+                exercise_template_external_id=template_id,
+                title=(proposed_exercises.get(template_id) or current_exercises[template_id]).title,
+                change=(
+                    "retained"
+                    if template_id in current_exercises and template_id in proposed_exercises
+                    else "added"
+                    if template_id in proposed_exercises
+                    else "removed"
+                ),
+                current_frequency=current_exercises.get(template_id, _EMPTY_AGGREGATE).frequency,
+                proposed_frequency=proposed_exercises.get(template_id, _EMPTY_AGGREGATE).frequency,
+                current_sets=current_exercises.get(template_id, _EMPTY_AGGREGATE).sets,
+                proposed_sets=proposed_exercises.get(template_id, _EMPTY_AGGREGATE).sets,
+                set_delta=(
+                    proposed_exercises.get(template_id, _EMPTY_AGGREGATE).sets
+                    - current_exercises.get(template_id, _EMPTY_AGGREGATE).sets
+                ),
+            )
+            for template_id in sorted(template_ids)
+        ]
+        current_muscles = _aggregate_muscle_sets(current_exercises, muscle_groups)
+        proposed_muscles = _aggregate_muscle_sets(proposed_exercises, muscle_groups)
+        muscle_group_changes = [
+            MuscleGroupPlanChange(
+                muscle_group=muscle_group,
+                current_sets=current_muscles.get(muscle_group, 0),
+                proposed_sets=proposed_muscles.get(muscle_group, 0),
+                set_delta=(
+                    proposed_muscles.get(muscle_group, 0) - current_muscles.get(muscle_group, 0)
+                ),
+            )
+            for muscle_group in sorted(set(current_muscles) | set(proposed_muscles))
+        ]
         return TrainingPlanComparison(
             proposal_id=proposal.proposal_id,
             status=proposal.status,
             current=current,
             proposed=proposed,
             rationale=proposal.plan.rationale,
+            exercise_changes=exercise_changes,
+            muscle_group_changes=muscle_group_changes,
+            unmatched_current_titles=[],
+            unmatched_proposed_titles=unmatched_proposed,
         )
 
     async def decide_plan_proposal(
@@ -484,8 +567,6 @@ class PostgresMCPRepository:
         )
 
     async def _validate_plan_references(self, data: TrainingPlanProposalInput) -> None:
-        for evidence_id in data.evidence_ids:
-            _evidence_category(evidence_id)
         async with self._session_factory() as session:
             if data.source_routine_id is not None:
                 routine_exists = await session.scalar(
@@ -517,23 +598,19 @@ class PostgresMCPRepository:
                 if unknown:
                     raise ValueError("proposal references unknown or inactive exercise templates")
 
-
-def _evidence_category(
-    evidence_id: str,
-) -> Literal["profile", "goal", "routine", "metric"]:
-    prefix = evidence_id.split(":", 1)[0]
-    categories: dict[str, Literal["profile", "goal", "routine", "metric"]] = {
-        "metrics": "metric",
-        "routine": "routine",
-        "profile": "profile",
-        "goal": "goal",
-    }
-    try:
-        return categories[prefix]
-    except KeyError as exc:
-        raise ValueError(
-            "evidence_ids must start with metrics:, routine:, profile:, or goal:"
-        ) from exc
+    async def _exercise_muscle_groups(self, external_ids: set[str]) -> dict[str, str]:
+        if not external_ids:
+            return {}
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        ExerciseTemplate.external_id,
+                        ExerciseTemplate.primary_muscle_group,
+                    ).where(ExerciseTemplate.external_id.in_(external_ids))
+                )
+            ).all()
+        return {external_id: muscle_group for external_id, muscle_group in rows}
 
 
 def _to_coach_proposal(data: TrainingPlanProposalInput) -> CoachProposalOutput:
@@ -547,6 +624,9 @@ def _to_coach_proposal(data: TrainingPlanProposalInput) -> CoachProposalOutput:
         workouts=[
             ProposedWorkout(
                 title=workout.title,
+                optional=workout.optional,
+                location=workout.location,
+                estimated_duration_minutes=workout.estimated_duration_minutes,
                 exercises=[
                     ProposedExercise(
                         exercise_template_id=exercise.exercise_template_external_id,
@@ -562,6 +642,10 @@ def _to_coach_proposal(data: TrainingPlanProposalInput) -> CoachProposalOutput:
             )
             for workout in data.workouts
         ],
+        changes=[
+            CoachPlanChangeJustification.model_validate(change.model_dump())
+            for change in data.changes
+        ],
     )
 
 
@@ -572,6 +656,9 @@ def _to_public_plan(data: CoachProposalOutput) -> TrainingPlanProposalInput:
             "workouts": [
                 {
                     "title": workout.title,
+                    "optional": workout.optional,
+                    "location": workout.location,
+                    "estimated_duration_minutes": workout.estimated_duration_minutes,
                     "exercises": [
                         {
                             "exercise_template_external_id": exercise.exercise_template_id,
@@ -587,3 +674,65 @@ def _to_public_plan(data: CoachProposalOutput) -> TrainingPlanProposalInput:
             ],
         }
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _ExerciseAggregate:
+    title: str
+    frequency: int
+    sets: int
+
+
+_EMPTY_AGGREGATE = _ExerciseAggregate(title="", frequency=0, sets=0)
+
+
+def _aggregate_current_exercises(
+    routines: list[TrainingRoutine],
+) -> dict[str, _ExerciseAggregate]:
+    result: dict[str, _ExerciseAggregate] = {}
+    for routine in routines:
+        for exercise in routine.exercises:
+            current = result.get(
+                exercise.exercise_template_external_id,
+                _ExerciseAggregate(title=exercise.title, frequency=0, sets=0),
+            )
+            result[exercise.exercise_template_external_id] = _ExerciseAggregate(
+                title=exercise.title,
+                frequency=current.frequency + 1,
+                sets=current.sets + len(exercise.sets),
+            )
+    return result
+
+
+def _aggregate_proposed_exercises(
+    workouts: list[ProposedPlanWorkout],
+) -> tuple[dict[str, _ExerciseAggregate], list[str]]:
+    result: dict[str, _ExerciseAggregate] = {}
+    unmatched: list[str] = []
+    for workout in workouts:
+        for exercise in workout.exercises:
+            template_id = exercise.exercise_template_external_id
+            if template_id is None:
+                unmatched.append(exercise.title)
+                continue
+            current = result.get(
+                template_id,
+                _ExerciseAggregate(title=exercise.title, frequency=0, sets=0),
+            )
+            result[template_id] = _ExerciseAggregate(
+                title=exercise.title,
+                frequency=current.frequency + 1,
+                sets=current.sets + len(exercise.sets),
+            )
+    return result, unmatched
+
+
+def _aggregate_muscle_sets(
+    exercises: dict[str, _ExerciseAggregate], muscle_groups: dict[str, str]
+) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for template_id, exercise in exercises.items():
+        muscle_group = muscle_groups.get(template_id)
+        if muscle_group is not None:
+            result[muscle_group] = result.get(muscle_group, 0) + exercise.sets
+    return result
