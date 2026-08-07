@@ -61,17 +61,27 @@ Como alternativa, revisa y fusiona manualmente
 No copies `HEVY_API_KEY` a la configuración de Hermes: el proceso arranca en el directorio del
 proyecto y `gym-coach` carga su `.env` local.
 
-## 4. Preparar la skill, opcionalmente
+## 4. Enlazar la skill del repositorio
 
-El ejemplo está en `integrations/hermes/skills/gym-coach/SKILL.md` y sigue el
+La skill está en `integrations/hermes/skills/gym-coach/SKILL.md` y sigue el
 [formato oficial de skills](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md).
-Revísalo y, si estás conforme, cópialo manualmente:
+Revísala y, si estás conforme, instala una vez el enlace administrado:
 
 ```bash
-mkdir -p ~/.hermes/skills/health/gym-coach
-cp /home/alexpm/code/gym-coach/integrations/hermes/skills/gym-coach/SKILL.md \
-  ~/.hermes/skills/health/gym-coach/SKILL.md
+./integrations/hermes/scripts/link-gym-coach-skill.sh --link
+./integrations/hermes/scripts/link-gym-coach-skill.sh --check
 ```
+
+El instalador conserva el `SKILL.md` anterior con sufijo `backup.<fecha>` y enlaza únicamente el
+archivo, no el directorio: el descubrimiento `rglob` de Hermes no recorre directorios enlazados. A
+partir de entonces cualquier edición de la skill en este repositorio queda visible para Hermes sin
+volver a copiarla. Hermes carga las skills al iniciar, por lo que tras cambios relevantes ejecuta:
+
+```bash
+hermes gateway restart
+```
+
+Si se mueve el repositorio a otra ruta, vuelve a ejecutar `--link` desde la ubicación nueva.
 
 ## 5. Verificar
 
@@ -87,12 +97,28 @@ hermes mcp test gym-coach
 hermes chat
 ```
 
+El servicio `postgres` tiene política `unless-stopped` y se recupera automáticamente cuando Docker
+Desktop vuelve a arrancar. En Docker Desktop activa “Start Docker Desktop when you sign in”. Ollama
+queda en el perfil opcional `llm` porque Hermes usa actualmente Codex y no necesita cargar el modelo
+local; para activarlo explícitamente usa `docker compose --profile llm up -d ollama`.
+
 Consulta de prueba:
 
 > Consulta mi último entrenamiento usando gym-coach y resúmelo sin proponer todavía modificaciones.
 
-Hermes debe descubrir 18 herramientas. Para la consulta de prueba debe usar
+Hermes debe descubrir 27 herramientas. Para la consulta de prueba debe usar
 `get_recent_workouts` y después `get_workout`; no debe afirmar que ha modificado Hevy.
+
+Para probar el entrenador integral, debe consultar primero `get_training_history_assessment` y
+`get_coaching_assessment`, entrevistar por bloques y pedir una única confirmación por bloque
+persistido, no una confirmación por cada campo o llamada MCP.
+La petición explícita de crear o mejorar una rutina registra la aprobación inicial del borrador.
+Hermes muestra después la comparación y `preview_training_plan_application` juntas y solicita una
+única confirmación final mediante `clarify`, con las opciones interactivas `Aprobar` y `Denegar`
+cuando Telegram ofrece botones. `apply_training_plan_to_hevy` devuelve `sync_status` y, tras una
+escritura confirmada, sincroniza automáticamente la instantánea completa con PostgreSQL.
+Si `sync_status=failed`, Hermes puede pedir confirmación y llamar a `sync_hevy` para ejecutar una
+sincronización completa de reparación sin modificar Hevy.
 
 Para validar el onboarding, inicia una conversación nueva y pide configurar tu perfil. Hermes debe:
 
@@ -109,7 +135,19 @@ La creación de un plan requiere una petición explícita del atleta y solo gene
 `decide_training_plan_proposal` registra una aprobación o rechazo confirmado, pero nunca escribe en
 Hevy. Cada cambio necesita una justificación y evidencias vigentes. Las sesiones opcionales deben
 marcarse como tales; planchas, cardio y otros ejercicios temporales usan duración o distancia, no
-repeticiones ficticias.
+repeticiones ficticias. Para superseries, usa el mismo `superset_group` en ejercicios consecutivos.
+
+## 6. Revisión automática por Telegram
+
+El repositorio incluye `integrations/hermes/scripts/gym-coach-workout-gate.sh`. Instálalo bajo
+`~/.hermes/scripts/`, enlaza la skill vigente y crea una tarea con `--script`,
+`--skill gym-coach`, `--deliver telegram` y un intervalo de cinco minutos. El script consulta
+eventos sin invocar al modelo y emite `wakeAgent=false` cuando no hay entrenamientos nuevos.
+
+Antes de activar la tarea, abre el bot en Telegram, envía `/start`, completa el emparejamiento si lo
+solicita y verifica un mensaje de prueba. `hermes gateway status` debe indicar que el gateway está
+activo. En WSL el servicio de usuario sobrevive al logout mediante linger, pero puede ser necesario
+reiniciarlo después de reiniciar completamente WSL.
 
 ## Diagnóstico
 
@@ -122,6 +160,11 @@ repeticiones ficticias.
   `hermes mcp test gym-coach`; ningún texto de diagnóstico debe escribirse en stdout del servidor.
 - **Autenticación Codex caducada:** ejecuta de nuevo `hermes auth add openai-codex`.
 - **PostgreSQL no accesible:** comprueba `docker compose ps` y que `postgres` figure `healthy`.
+- **Telegram responde `Chat not found`:** inicia una conversación con el bot mediante `/start` y
+  vuelve a establecer el canal de inicio; no compartas el token ni el ID en logs o commits.
+- **Hermes usa una versión antigua de la skill:** ejecuta el instalador con `--check`; si falla, usa
+  `--link` y reinicia el gateway. El MCP también es un subproceso persistente y necesita el reinicio
+  para cargar cambios Python.
 
 ## Imágenes
 

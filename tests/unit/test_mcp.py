@@ -8,8 +8,8 @@ from mcp import Client
 from pydantic import SecretStr, ValidationError
 
 from gym_coach.config import Settings
-from gym_coach.integrations.hevy.errors import HevyHTTPError
-from gym_coach.integrations.hevy.schemas import UserInfo
+from gym_coach.integrations.hevy.errors import HevyHTTPError, HevyInvalidResponseError
+from gym_coach.integrations.hevy.schemas import Routine, RoutineWriteRequest, UserInfo
 from gym_coach.mcp.errors import ResourceNotFoundError
 from gym_coach.mcp.schemas import (
     AthleteProfileUpdate,
@@ -23,6 +23,9 @@ from gym_coach.mcp.schemas import (
     ProfileMutationResult,
     ProposedPlanSet,
     RecentWorkouts,
+    RoutineApplicationCommand,
+    RoutineApplicationPreview,
+    RoutineApplicationReconciliationContext,
     RoutineList,
     SystemStatus,
     TrainingGoalUpdate,
@@ -32,10 +35,16 @@ from gym_coach.mcp.schemas import (
     TrainingRoutine,
     TrainingWorkout,
     VerifiedPlanEvidence,
+    WorkoutReviewAcknowledgement,
     WorkoutSummary,
 )
 from gym_coach.mcp.server import create_mcp_server
-from gym_coach.mcp.tools import MAX_EXERCISE_RESULTS, MAX_RECENT_WORKOUTS, MCPTools
+from gym_coach.mcp.tools import (
+    MAX_EXERCISE_RESULTS,
+    MAX_RECENT_WORKOUTS,
+    MCPTools,
+    _routine_request,
+)
 from gym_coach.metrics.service import ExerciseReport
 from gym_coach.metrics.types import (
     AdherenceMetric,
@@ -43,11 +52,18 @@ from gym_coach.metrics.types import (
     MetricsSummary,
     StagnationResult,
 )
+from gym_coach.sync.hevy import HevySyncError
+from gym_coach.sync.types import SyncCounts, SyncResult
 
 
 class FakeRepository:
     def __init__(self) -> None:
         self.search_arguments: tuple[str, int] | None = None
+        self.application_finished: tuple[str, list[str]] | None = None
+        self.application_error_type: str | None = None
+        self.application_action: Literal["create", "update"] = "create"
+        self.reconciliation_context: RoutineApplicationReconciliationContext | None = None
+        self.reconciled: tuple[str, list[str], str | None] | None = None
 
     async def is_available(self) -> bool:
         return True
@@ -171,6 +187,69 @@ class FakeRepository:
             message="Decision recorded without modifying Hevy.",
         )
 
+    async def acknowledge_workout_review(
+        self, review_id: UUID
+    ) -> WorkoutReviewAcknowledgement | None:
+        return WorkoutReviewAcknowledgement(
+            review_id=review_id,
+            workout_external_id="workout-public-id",
+        )
+
+    async def prepare_routine_application(
+        self, proposal_id: UUID
+    ) -> RoutineApplicationPreview | None:
+        return RoutineApplicationPreview(
+            application_id=UUID("00000000-0000-0000-0000-000000000002"),
+            proposal_id=proposal_id,
+            action=self.application_action,
+            routine_titles=["Upper A"],
+            confirmation_token="one-time-token",
+            warning="Confirm exact external write.",
+        )
+
+    async def claim_routine_application(
+        self, proposal_id: UUID, confirmation_token: str
+    ) -> RoutineApplicationCommand | None:
+        if confirmation_token != "one-time-token":
+            raise ValueError("The confirmation token is invalid")
+        return RoutineApplicationCommand(
+            application_id=UUID("00000000-0000-0000-0000-000000000002"),
+            proposal_id=proposal_id,
+            action=self.application_action,
+            source_routine_id=("routine-source" if self.application_action == "update" else None),
+            source_routine_hash=("stale-hash" if self.application_action == "update" else None),
+            plan=_test_plan(self.application_action),
+        )
+
+    async def finish_routine_application(
+        self,
+        application_id: UUID,
+        *,
+        status: Literal["applied", "failed", "uncertain", "partial"],
+        routine_ids: list[str],
+        error_type: str | None,
+    ) -> None:
+        del application_id
+        self.application_finished = (status, routine_ids)
+        self.application_error_type = error_type
+
+    async def get_routine_application_reconciliation_context(
+        self, proposal_id: UUID
+    ) -> RoutineApplicationReconciliationContext | None:
+        del proposal_id
+        return self.reconciliation_context
+
+    async def reconcile_routine_application(
+        self,
+        application_id: UUID,
+        *,
+        status: Literal["applied", "partial", "uncertain"],
+        routine_ids: list[str],
+        error_type: str | None,
+    ) -> None:
+        del application_id
+        self.reconciled = (status, routine_ids, error_type)
+
 
 class FakeMetrics:
     async def summary(
@@ -224,10 +303,29 @@ class FakeMetrics:
         )
 
 
+class FakeSyncRunner:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls = 0
+
+    async def sync(self) -> SyncResult:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return SyncResult(
+            run_id="sync-run",
+            counts=SyncCounts(inserted=1, updated=2, unchanged=3, deleted=4),
+        )
+
+
 class FakeHevyClient:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
         self.calls = 0
+        self.update_calls = 0
+        self.routines: list[Routine] = []
+        self.reconciliation_routine: Routine | None = None
+        self.get_routine_calls = 0
 
     async def __aenter__(self) -> Self:
         return self
@@ -241,9 +339,58 @@ class FakeHevyClient:
             raise self.error
         return UserInfo(id="not-exposed", name="Private Name", url=None)
 
+    async def create_routine(self, request: RoutineWriteRequest) -> Routine:
+        if self.error is not None:
+            raise self.error
+        return Routine(id="created-routine", title=request.routine.title, exercises=[])
+
+    async def get_routine(self, routine_id: str) -> Routine:
+        self.get_routine_calls += 1
+        if self.reconciliation_routine is not None:
+            return self.reconciliation_routine
+        return Routine(id=routine_id, title="Existing", exercises=[])
+
+    async def get_all_routines(self) -> list[Routine]:
+        return self.routines
+
+    async def update_routine(self, routine_id: str, request: RoutineWriteRequest) -> Routine:
+        self.update_calls += 1
+        if self.error is not None:
+            raise self.error
+        return Routine(id=routine_id, title=request.routine.title, exercises=[])
+
+
+def _test_plan(action: Literal["create", "update"] = "create") -> TrainingPlanProposalInput:
+    evidence_id = f"metrics:summary:28d:{datetime.now(UTC).date().isoformat()}"
+    return TrainingPlanProposalInput(
+        kind="new_routine" if action == "create" else "routine_update",
+        title="Plan",
+        summary="Summary",
+        rationale="Rationale",
+        evidence_ids=[evidence_id],
+        changes=[{"description": "Change", "evidence_ids": [evidence_id]}],
+        source_routine_id="routine-source" if action == "update" else None,
+        workouts=[
+            {
+                "title": "Upper A",
+                "exercises": [
+                    {
+                        "exercise_template_external_id": "template-public-id",
+                        "title": "Bench",
+                        "rest_seconds": 120,
+                        "sets": [{"reps_min": 8, "reps_max": 12}],
+                    }
+                ],
+            }
+        ],
+    )
+
 
 def make_tools(
-    *, api_key: str | None = None, client: FakeHevyClient | None = None
+    *,
+    api_key: str | None = None,
+    client: FakeHevyClient | None = None,
+    sync_runner: FakeSyncRunner | None = None,
 ) -> tuple[MCPTools, FakeRepository, FakeHevyClient]:
     repository = FakeRepository()
     fake_client = client or FakeHevyClient()
@@ -251,7 +398,13 @@ def make_tools(
         _env_file=None,
         HEVY_API_KEY=SecretStr(api_key) if api_key is not None else None,
     )
-    tools = MCPTools(settings, repository, FakeMetrics(), lambda: fake_client)
+    tools = MCPTools(
+        settings,
+        repository,
+        FakeMetrics(),
+        lambda: fake_client,
+        (lambda: sync_runner) if sync_runner is not None else None,
+    )
     return tools, repository, fake_client
 
 
@@ -264,6 +417,7 @@ async def test_server_initializes_and_enumerates_expected_tools() -> None:
     assert {tool.name for tool in registered} == {
         "get_system_status",
         "get_hevy_connection_status",
+        "sync_hevy",
         "get_athlete_summary",
         "get_onboarding_status",
         "save_confirmed_athlete_profile",
@@ -280,10 +434,28 @@ async def test_server_initializes_and_enumerates_expected_tools() -> None:
         "get_training_plan_proposal",
         "compare_training_plan_proposal",
         "decide_training_plan_proposal",
+        "acknowledge_automatic_workout_review",
+        "get_training_history_assessment",
+        "get_coaching_assessment",
+        "save_confirmed_athlete_measurement",
+        "save_confirmed_athlete_check_in",
+        "preview_training_plan_application",
+        "apply_training_plan_to_hevy",
+        "reconcile_training_plan_application",
     }
     annotations = {tool.name: tool.annotations for tool in registered}
     assert annotations["get_training_metrics"].read_only_hint is True
     assert annotations["save_confirmed_athlete_profile"].read_only_hint is False
+
+
+async def test_automatic_review_acknowledgement_is_local_and_idempotent_boundary() -> None:
+    tools, _, _ = make_tools()
+    review_id = uuid4()
+
+    result = await tools.acknowledge_automatic_workout_review(review_id)
+
+    assert result.review_id == review_id
+    assert result.status == "completed"
 
 
 async def test_server_validates_arguments_and_enforces_workout_maximum() -> None:
@@ -323,6 +495,9 @@ async def test_profile_and_goal_writes_require_explicit_confirmation() -> None:
         equipment=["full gym"],
         limitations_reviewed=True,
         preferences_reviewed=True,
+        lifestyle_reviewed=True,
+        nutrition_reviewed=True,
+        health_reviewed=True,
     )
     goal = TrainingGoalUpdate(
         goal_type="hypertrophy",
@@ -456,6 +631,269 @@ async def test_missing_routine_and_workout_are_safe_errors() -> None:
     assert workout.is_error
     assert "not found" in str(routine.content).lower()
     assert "not found" in str(workout.content).lower()
+
+
+async def test_hevy_application_requires_preview_and_second_confirmation() -> None:
+    tools, repository, _ = make_tools(api_key="configured-placeholder")
+    proposal_id = uuid4()
+
+    preview = await tools.preview_training_plan_application(proposal_id)
+    with pytest.raises(ValueError, match="Explicit athlete confirmation"):
+        await tools.apply_training_plan_to_hevy(
+            proposal_id,
+            preview.confirmation_token,
+            user_confirmed=False,
+        )
+    with pytest.raises(ValueError, match="token is invalid"):
+        await tools.apply_training_plan_to_hevy(
+            proposal_id,
+            "wrong-token",
+            user_confirmed=True,
+        )
+
+    applied = await tools.apply_training_plan_to_hevy(
+        proposal_id,
+        preview.confirmation_token,
+        user_confirmed=True,
+    )
+
+    assert applied.status == "applied"
+    assert applied.routine_ids == ["created-routine"]
+    assert repository.application_finished == ("applied", ["created-routine"])
+
+
+async def test_hevy_application_synchronizes_postgres_after_confirmed_write() -> None:
+    sync_runner = FakeSyncRunner()
+    tools, _, _ = make_tools(api_key="configured-placeholder", sync_runner=sync_runner)
+    proposal_id = uuid4()
+    preview = await tools.preview_training_plan_application(proposal_id)
+
+    result = await tools.apply_training_plan_to_hevy(
+        proposal_id,
+        preview.confirmation_token,
+        user_confirmed=True,
+    )
+
+    assert result.status == "applied"
+    assert result.sync_status == "succeeded"
+    assert sync_runner.calls == 1
+
+
+async def test_manual_hevy_sync_requires_confirmation_and_returns_counts() -> None:
+    sync_runner = FakeSyncRunner()
+    tools, _, _ = make_tools(api_key="configured-placeholder", sync_runner=sync_runner)
+
+    with pytest.raises(ValueError, match="Explicit athlete confirmation"):
+        await tools.sync_hevy(user_confirmed=False)
+
+    result = await tools.sync_hevy(user_confirmed=True)
+
+    assert result.status == "succeeded"
+    assert result.run_id == "sync-run"
+    assert result.inserted == 1
+    assert result.updated == 2
+    assert result.unchanged == 3
+    assert result.deleted == 4
+    assert sync_runner.calls == 1
+
+
+async def test_hevy_application_keeps_write_result_when_postgres_sync_fails() -> None:
+    sync_runner = FakeSyncRunner(HevySyncError("sync unavailable"))
+    tools, _, _ = make_tools(api_key="configured-placeholder", sync_runner=sync_runner)
+    proposal_id = uuid4()
+    preview = await tools.preview_training_plan_application(proposal_id)
+
+    result = await tools.apply_training_plan_to_hevy(
+        proposal_id,
+        preview.confirmation_token,
+        user_confirmed=True,
+    )
+
+    assert result.status == "applied"
+    assert result.sync_status == "failed"
+    assert "synchronization failed" in result.message
+
+
+async def test_hevy_update_refuses_a_remote_routine_changed_after_preview() -> None:
+    client = FakeHevyClient()
+    tools, repository, _ = make_tools(api_key="configured-placeholder", client=client)
+    repository.application_action = "update"
+    proposal_id = uuid4()
+    preview = await tools.preview_training_plan_application(proposal_id)
+
+    result = await tools.apply_training_plan_to_hevy(
+        proposal_id,
+        preview.confirmation_token,
+        user_confirmed=True,
+    )
+
+    assert result.status == "failed"
+    assert client.update_calls == 0
+    assert repository.application_finished == ("failed", [])
+    assert result.error_code == "stale_routine"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_code"),
+    [
+        (HevyHTTPError(403, "private provider detail"), "failed", "hevy_http_403"),
+        (
+            HevyInvalidResponseError("private provider payload"),
+            "uncertain",
+            "hevy_invalid_response",
+        ),
+    ],
+)
+async def test_hevy_write_failure_returns_safe_actionable_diagnostic(
+    error: Exception,
+    expected_status: str,
+    expected_code: str,
+) -> None:
+    client = FakeHevyClient(error)
+    tools, repository, _ = make_tools(api_key="configured-placeholder", client=client)
+    proposal_id = uuid4()
+    preview = await tools.preview_training_plan_application(proposal_id)
+
+    result = await tools.apply_training_plan_to_hevy(
+        proposal_id,
+        preview.confirmation_token,
+        user_confirmed=True,
+    )
+
+    assert result.status == expected_status
+    assert result.error_code == expected_code
+    assert expected_code in result.message
+    assert "private provider" not in result.model_dump_json()
+    assert repository.application_error_type == expected_code
+
+
+async def test_reconcile_create_records_only_exact_remote_matches() -> None:
+    client = FakeHevyClient()
+    tools, repository, _ = make_tools(api_key="configured-placeholder", client=client)
+    proposal_id = uuid4()
+    plan_data = _test_plan().model_dump(mode="json")
+    second = {**plan_data["workouts"][0], "title": "Lower A"}
+    plan_data["workouts"].append(second)
+    plan = TrainingPlanProposalInput.model_validate(plan_data)
+    repository.reconciliation_context = RoutineApplicationReconciliationContext(
+        application_id=UUID("00000000-0000-0000-0000-000000000002"),
+        proposal_id=proposal_id,
+        action="create",
+        status="uncertain",
+        applied_at=datetime.now(UTC),
+        recorded_routine_ids=[],
+        plan=plan,
+    )
+    client.routines = [
+        Routine.model_validate(
+            {
+                "id": "created-upper",
+                "title": "Upper A",
+                "folder_id": None,
+                "created_at": datetime.now(UTC),
+                "exercises": [
+                    {
+                        "title": "Bench",
+                        "exercise_template_id": "template-public-id",
+                        "rest_seconds": 120,
+                        "sets": [
+                            {
+                                "type": "normal",
+                                "rep_range": {"start": 8, "end": 12},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    ]
+
+    result = await tools.reconcile_training_plan_application(proposal_id, user_confirmed=True)
+
+    assert result.status == "partial"
+    assert result.matched_workout_indexes == [0]
+    assert result.routine_ids == ["created-upper"]
+    assert repository.reconciled == (
+        "partial",
+        ["created-upper"],
+        "reconciled_partial",
+    )
+
+
+async def test_reconcile_update_reads_source_and_matches_exact_plan() -> None:
+    client = FakeHevyClient()
+    sync_runner = FakeSyncRunner()
+    tools, repository, _ = make_tools(
+        api_key="configured-placeholder", client=client, sync_runner=sync_runner
+    )
+    proposal_id = uuid4()
+    plan = _test_plan("update")
+    client.reconciliation_routine = Routine.model_validate(
+        {
+            "id": "routine-source",
+            "title": "Upper A",
+            "folder_id": None,
+            "exercises": [
+                {
+                    "title": "Bench",
+                    "exercise_template_id": "template-public-id",
+                    "rest_seconds": 120,
+                    "sets": [{"type": "normal", "rep_range": {"start": 8, "end": 12}}],
+                }
+            ],
+        }
+    )
+    repository.reconciliation_context = RoutineApplicationReconciliationContext(
+        application_id=UUID("00000000-0000-0000-0000-000000000002"),
+        proposal_id=proposal_id,
+        action="update",
+        status="uncertain",
+        applied_at=datetime.now(UTC),
+        recorded_routine_ids=[],
+        plan=plan,
+    )
+
+    result = await tools.reconcile_training_plan_application(proposal_id, user_confirmed=True)
+
+    assert result.status == "applied"
+    assert result.matched_workout_indexes == [0]
+    assert result.routine_ids == ["routine-source"]
+    assert result.sync_status == "succeeded"
+    assert sync_runner.calls == 1
+    assert client.get_routine_calls == 1
+    assert repository.reconciled == ("applied", ["routine-source"], None)
+
+
+def test_routine_request_assigns_shared_hevy_superset_ids() -> None:
+    plan = {
+        "title": "Upper paired",
+        "exercises": [
+            {
+                "title": "Press",
+                "exercise_template_external_id": "template-press",
+                "rest_seconds": 60,
+                "superset_group": "push_pull",
+                "sets": [{"reps_min": 8, "reps_max": 12}],
+            },
+            {
+                "title": "Row",
+                "exercise_template_external_id": "template-row",
+                "rest_seconds": 60,
+                "superset_group": "push_pull",
+                "sets": [{"reps_min": 8, "reps_max": 12}],
+            },
+            {
+                "title": "Curl",
+                "exercise_template_external_id": "template-curl",
+                "rest_seconds": 60,
+                "sets": [{"reps_min": 10, "reps_max": 15}],
+            },
+        ],
+    }
+
+    request = _routine_request(plan)
+
+    assert [item.superset_id for item in request.routine.exercises] == [1, 1, None]
 
 
 async def test_hevy_not_configured_does_not_construct_client() -> None:

@@ -25,7 +25,8 @@ class SystemStatus(MCPPublicModel):
     application: str = "gym-coach"
     version: str
     backend_status: Literal["healthy", "degraded"]
-    read_only: bool = True
+    read_only: bool = False
+    hevy_writes_guarded: bool = True
     hevy: ComponentStatus
     postgres: ComponentStatus
 
@@ -35,6 +36,17 @@ class HevyConnectionStatus(MCPPublicModel):
     accessible: bool
     status: Literal["available", "unavailable", "not_configured"]
     detail: str
+
+
+class HevySyncResult(MCPPublicModel):
+    """Summary of a complete, idempotent Hevy-to-PostgreSQL synchronization."""
+
+    status: Literal["succeeded"] = "succeeded"
+    run_id: str
+    inserted: int = Field(ge=0)
+    updated: int = Field(ge=0)
+    unchanged: int = Field(ge=0)
+    deleted: int = Field(ge=0)
 
 
 class AthleteGoal(MCPPublicModel):
@@ -53,6 +65,9 @@ class AthleteSummary(MCPPublicModel):
     profile_evidence_id: EvidenceId | None = None
     hevy_data_available: bool
     experience_level: str | None = None
+    birth_year: int | None = None
+    sex_for_energy_equation: str | None = None
+    height_cm: str | None = None
     training_days_per_week: int | None = None
     session_duration_minutes: int | None = None
     equipment: list[str] = Field(default_factory=list)
@@ -60,12 +75,30 @@ class AthleteSummary(MCPPublicModel):
     preferences: list[str] = Field(default_factory=list)
     limitations_reviewed: bool = False
     preferences_reviewed: bool = False
+    occupation_activity: str | None = None
+    average_daily_steps: int | None = None
+    sleep_hours: float | None = None
+    sleep_quality: int | None = None
+    stress_level: int | None = None
+    dietary_pattern: str | None = None
+    dietary_restrictions: list[str] = Field(default_factory=list)
+    food_allergies: list[str] = Field(default_factory=list)
+    nutrition_preferences: list[str] = Field(default_factory=list)
+    nutrition_tracking_preference: str | None = None
+    health_conditions: list[str] = Field(default_factory=list)
+    medications_affecting_training: list[str] = Field(default_factory=list)
+    lifestyle_reviewed: bool = False
+    nutrition_reviewed: bool = False
+    health_reviewed: bool = False
     goals: list[AthleteGoal] = Field(default_factory=list)
     pending_fields: list[str] = Field(default_factory=list)
 
 
 class AthleteProfileUpdate(MCPPublicModel):
-    experience_level: Literal["beginner", "intermediate", "advanced"]
+    experience_level: Literal["beginner", "intermediate", "advanced"] | None = None
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+    sex_for_energy_equation: Literal["female", "male", "unspecified"] = "unspecified"
+    height_cm: Decimal | None = Field(default=None, ge=100, le=250)
     training_days_per_week: Annotated[int, Field(ge=1, le=7)]
     session_duration_minutes: Annotated[int | None, Field(ge=15, le=300)] = None
     equipment: list[ProfileItem] = Field(default_factory=list, max_length=50)
@@ -73,10 +106,110 @@ class AthleteProfileUpdate(MCPPublicModel):
     preferences: list[ProfileItem] = Field(default_factory=list, max_length=30)
     limitations_reviewed: Literal[True]
     preferences_reviewed: Literal[True]
+    occupation_activity: Literal["sedentary", "light", "moderate", "high"] | None = None
+    average_daily_steps: int | None = Field(default=None, ge=0, le=100_000)
+    sleep_hours: float | None = Field(default=None, ge=0, le=24)
+    sleep_quality: int | None = Field(default=None, ge=1, le=5)
+    stress_level: int | None = Field(default=None, ge=1, le=5)
+    dietary_pattern: str | None = Field(default=None, max_length=64)
+    dietary_restrictions: list[ProfileItem] = Field(default_factory=list, max_length=30)
+    food_allergies: list[ProfileItem] = Field(default_factory=list, max_length=30)
+    nutrition_preferences: list[ProfileItem] = Field(default_factory=list, max_length=30)
+    nutrition_tracking_preference: Literal["none", "habits", "portions", "calories"] | None = None
+    health_conditions: list[ProfileItem] = Field(default_factory=list, max_length=30)
+    medications_affecting_training: list[ProfileItem] = Field(default_factory=list, max_length=30)
+    lifestyle_reviewed: Literal[True]
+    nutrition_reviewed: Literal[True]
+    health_reviewed: Literal[True]
+
+
+class AthleteMeasurementInput(MCPPublicModel):
+    measured_on: date
+    weight_kg: Decimal | None = Field(default=None, ge=25, le=500)
+    waist_cm: Decimal | None = Field(default=None, ge=30, le=300)
+    body_fat_percent: Decimal | None = Field(default=None, ge=2, le=70)
+    body_fat_method: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def require_measurement(self) -> "AthleteMeasurementInput":
+        if self.weight_kg is None and self.waist_cm is None and self.body_fat_percent is None:
+            raise ValueError("at least one measurement is required")
+        return self
+
+
+class AthleteMeasurementView(AthleteMeasurementInput):
+    measurement_id: UUID
+    user_confirmation_recorded: bool = True
+
+
+class AthleteCheckInInput(MCPPublicModel):
+    checked_on: date
+    sleep_quality: int | None = Field(default=None, ge=1, le=5)
+    stress_level: int | None = Field(default=None, ge=1, le=5)
+    energy_level: int | None = Field(default=None, ge=1, le=5)
+    hunger_level: int | None = Field(default=None, ge=1, le=5)
+    soreness_level: int | None = Field(default=None, ge=1, le=5)
+    training_adherence: int | None = Field(default=None, ge=1, le=5)
+    nutrition_adherence: int | None = Field(default=None, ge=1, le=5)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class AthleteCheckInView(AthleteCheckInInput):
+    check_in_id: UUID
+    user_confirmation_recorded: bool = True
+
+
+class TrainingHistoryAssessment(MCPPublicModel):
+    evidence_id: EvidenceId
+    period_start: datetime | None = None
+    period_end: datetime | None = None
+    calendar_days: int = Field(ge=0)
+    workout_count: int = Field(ge=0)
+    active_week_count: int = Field(ge=0)
+    distinct_exercise_count: int = Field(ge=0)
+    workouts_per_active_week: str
+    history_level: Literal["insufficient", "developing", "established", "extensive"]
+    confidence: Literal["low", "medium", "high"]
+    limitations: list[str]
+
+
+class CoachingRule(MCPPublicModel):
+    rule_id: str
+    topic: Literal[
+        "resistance_training", "physical_activity", "fat_loss", "protein", "diet_quality"
+    ]
+    guidance: str
+    source_title: str
+    source_url: str
+    source_year: int
+    scope: str
+
+
+class CoachingAssessment(MCPPublicModel):
+    history: TrainingHistoryAssessment
+    readiness: Literal["needs_interview", "ready_for_analysis", "needs_professional_clearance"]
+    missing_or_unreviewed: list[str]
+    priority_questions: list[str]
+    latest_weight_kg: str | None = None
+    bmi: str | None = None
+    resting_energy_kcal: int | None = None
+    protein_range_g_per_day: tuple[int, int] | None = None
+    nutrition_note: str
+    safety_note: str
+    applicable_rules: list[CoachingRule]
 
 
 class TrainingGoalUpdate(MCPPublicModel):
-    goal_type: Literal["strength", "hypertrophy", "endurance", "health", "skill", "other"]
+    goal_type: Literal[
+        "strength",
+        "hypertrophy",
+        "fat_loss",
+        "body_recomposition",
+        "endurance",
+        "health",
+        "skill",
+        "other",
+    ]
     description: Annotated[str, Field(min_length=3, max_length=1000)]
     priority: Annotated[int, Field(ge=1, le=5)] = 1
     target_date: date | None = None
@@ -301,6 +434,9 @@ class ProposedPlanExercise(MCPPublicModel):
     rest_seconds: int = Field(ge=0, le=900)
     sets: list[ProposedPlanSet] = Field(min_length=1, max_length=20)
     notes: str | None = Field(default=None, max_length=1000)
+    superset_group: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_.:-]+$"
+    )
 
 
 class ProposedPlanWorkout(MCPPublicModel):
@@ -310,6 +446,19 @@ class ProposedPlanWorkout(MCPPublicModel):
     location: Literal["gym", "home", "outdoors", "other"] = "gym"
     estimated_duration_minutes: int | None = Field(default=None, ge=5, le=300)
 
+    @model_validator(mode="after")
+    def validate_superset_groups(self) -> "ProposedPlanWorkout":
+        groups: dict[str, list[int]] = {}
+        for index, exercise in enumerate(self.exercises):
+            if exercise.superset_group is not None:
+                groups.setdefault(exercise.superset_group, []).append(index)
+        for group, indexes in groups.items():
+            if len(indexes) < 2:
+                raise ValueError(f"superset_group {group!r} must contain at least two exercises")
+            if indexes != list(range(indexes[0], indexes[-1] + 1)):
+                raise ValueError(f"superset_group {group!r} must be contiguous")
+        return self
+
 
 class PlanChangeJustification(MCPPublicModel):
     description: str = Field(min_length=1, max_length=2000)
@@ -318,7 +467,7 @@ class PlanChangeJustification(MCPPublicModel):
 
 class VerifiedPlanEvidence(MCPPublicModel):
     evidence_id: EvidenceId
-    category: Literal["profile", "goal", "routine", "metric"]
+    category: Literal["profile", "goal", "routine", "metric", "history"]
     description: str
     value: str
     period_start: datetime | None = None
@@ -365,6 +514,7 @@ class PlanComparisonSide(MCPPublicModel):
     optional_workout_count: int = Field(ge=0)
     exercise_count: int = Field(ge=0)
     set_count: int = Field(ge=0)
+    superset_group_count: int = Field(ge=0, default=0)
 
 
 class ExercisePlanChange(MCPPublicModel):
@@ -404,3 +554,61 @@ class PlanDecisionResult(MCPPublicModel):
     user_confirmation_recorded: bool = True
     applied_to_hevy: bool = False
     message: str
+
+
+class RoutineApplicationPreview(MCPPublicModel):
+    application_id: UUID
+    proposal_id: UUID
+    action: Literal["create", "update"]
+    status: Literal["prepared"] = "prepared"
+    routine_titles: list[str]
+    source_routine_id: str | None = None
+    confirmation_token: str
+    warning: str
+
+
+class RoutineApplicationResult(MCPPublicModel):
+    application_id: UUID
+    proposal_id: UUID
+    action: Literal["create", "update"]
+    status: Literal["applied", "failed", "uncertain", "partial"]
+    routine_ids: list[str]
+    error_code: str | None = None
+    sync_status: Literal["not_configured", "not_run", "succeeded", "failed"] = "not_run"
+    message: str
+
+
+class RoutineApplicationCommand(MCPPublicModel):
+    application_id: UUID
+    proposal_id: UUID
+    action: Literal["create", "update"]
+    source_routine_id: str | None = None
+    source_routine_hash: str | None = None
+    plan: TrainingPlanProposalInput
+
+
+class RoutineApplicationReconciliationContext(MCPPublicModel):
+    application_id: UUID
+    proposal_id: UUID
+    action: Literal["create", "update"]
+    status: Literal["uncertain", "partial"]
+    applied_at: datetime
+    recorded_routine_ids: list[str]
+    plan: TrainingPlanProposalInput
+
+
+class RoutineApplicationReconciliationResult(MCPPublicModel):
+    application_id: UUID
+    proposal_id: UUID
+    status: Literal["applied", "partial", "uncertain"]
+    matched_workout_indexes: list[int]
+    routine_ids: list[str]
+    error_code: str | None = None
+    sync_status: Literal["not_configured", "not_run", "succeeded", "failed"] = "not_run"
+    message: str
+
+
+class WorkoutReviewAcknowledgement(MCPPublicModel):
+    review_id: UUID
+    workout_external_id: str
+    status: Literal["completed"] = "completed"

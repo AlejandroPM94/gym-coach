@@ -22,12 +22,15 @@
 - Añade tests unitarios sin red para toda conducta nueva y tests de integración autocontenidos.
 - Ejecuta antes de terminar: `ruff format .`, `ruff check .`, `mypy` y `pytest`.
 - Usa migraciones Alembic para cualquier cambio de esquema; no alteres tablas manualmente.
-- Mantén los contratos MCP públicos separados de modelos Hevy y ORM. Las escrituras locales de
-  perfil, objetivos y decisiones requieren confirmación explícita y auditoría; ninguna herramienta
-  puede escribir en Hevy hasta un hito específico con aprobación adicional.
+- Mantén los contratos MCP públicos separados de modelos Hevy y ORM. Las escrituras locales
+  requieren confirmación y auditoría. Una escritura Hevy exige propuesta aprobada, previsualización
+  exacta, segunda confirmación y token de un solo uso; no la reintentes si el resultado es incierto.
 - No aceptes borradores con evidencias meramente declaradas por el agente: vuelve a resolver cada ID
   en el backend. Representa repeticiones, duración, distancia y opcionalidad como campos distintos y
   calcula comparaciones de planes en Python.
+- Las automatizaciones de entrenamientos usan el feed público incremental de Hevy y una cola
+  PostgreSQL idempotente. No consultes esquemas internos de Hermes ni uses webhooks privados de Hevy;
+  no marques una revisión completa antes de preparar su mensaje.
 - Documenta decisiones no obvias en `PROJECT_BRIEF.md` o como ADR cuando crezcan en alcance.
 - Al terminar cada hito relevante, actualiza `docs/PROJECT_STATE.md`, `docs/NEXT_STEPS.md` y
   `docs/DECISIONS.md` para reflejar el estado verificado, el trabajo pendiente y las decisiones.

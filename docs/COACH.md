@@ -6,11 +6,14 @@ opción experimental y para posibles evaluaciones; no es necesaria para ejecutar
 ## Capacidades actuales
 
 - Mantener un perfil con experiencia, disponibilidad, equipamiento, limitaciones y preferencias.
+- Mantener datos confirmados de antropometría, estilo de vida, salud y nutrición, más mediciones y
+  check-ins fechados.
 - Mantener objetivos deportivos ordenados y versionados.
 - Revisar las rutinas activas sincronizadas y las métricas de los últimos 28 días.
 - Responder con hallazgos que citan evidencias deterministas.
 - Proponer una rutina nueva, una mejora o una progresión como borrador estructurado.
-- Aprobar o rechazar el borrador en PostgreSQL sin modificar Hevy.
+- Aprobar o rechazar el borrador y, mediante MCP, previsualizar y aplicar la versión exacta en Hevy
+  tras una única confirmación final sobre la preview exacta.
 
 ## Frontera de datos
 
@@ -34,8 +37,16 @@ a esos identificadores y se rechaza si aparece uno desconocido. El agente interp
 calcula volumen, e1RM, adherencia o estancamiento. Una propuesta es orientación deportiva, no un
 diagnóstico médico.
 
-Los estados permitidos son `draft`, `approved` y `rejected`. Solo un borrador puede decidirse y la
-transición es irreversible en esta fase. No existe estado `applied` ni cliente de escritura Hevy.
+Los estados de propuesta son `draft`, `approved` y `rejected`. La aplicación externa tiene estado
+separado (`prepared`, `applying`, `applied`, `failed`, `uncertain` o `partial`), hash del plan y de la
+rutina origen y token almacenado solo como hash. Antes de actualizar se compara otra vez la rutina
+remota; un timeout nunca se reintenta.
+
+El resultado público incluye un diagnóstico seguro (`hevy_http_<status>`,
+`hevy_invalid_response`, `hevy_timeout` o `hevy_transport`) sin cuerpo remoto. Un `403` puede indicar
+permisos, plan o límite de cuenta —la modalidad gratuita de Hevy admite cuatro rutinas— y no debe
+presentarse automáticamente como una API key incorrecta. Una respuesta inválida después de un 2xx
+queda `uncertain`, porque la escritura puede haberse producido, y nunca se reintenta automáticamente.
 
 ## Pruebas
 

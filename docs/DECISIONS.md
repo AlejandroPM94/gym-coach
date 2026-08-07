@@ -1,5 +1,137 @@
 # Registro de decisiones
 
+## 2026-08-06 — Superseries explícitas y agrupación de confirmaciones
+
+- **Decisión:** representar una superserie con un `superset_group` textual en la propuesta y
+  convertirlo a un ID entero estable dentro de cada rutina. Agrupar la entrevista y persistencia por
+  bloques, manteniendo una confirmación explícita para cada bloque y las protecciones de escritura.
+- **Motivo:** el modelo Hevy ya expone `superset_id`, pero las propuestas no podían solicitarlo; las
+  confirmaciones por campo hacían pesada la conversación sin aportar información adicional.
+- **Alternativas:** inferir superseries por títulos; eliminar toda confirmación; guardar grupos solo
+  en la memoria conversacional.
+- **Consecuencias:** el plan conserva la intención de superserie y las validaciones son testeables;
+  las escrituras externas siguen auditadas y el flujo de Topics queda separado del dominio.
+
+## 2026-08-06 — Supergrupo privado y entrega de revisiones por Topic
+
+- **Decisión:** usar el supergrupo privado existente con `Entrenamiento` y `Revisiones`, y dirigir
+  el cron post-entrenamiento a `Revisiones` mediante el destino Telegram con `chat_id` y `thread_id`.
+- **Motivo:** Hermes ya conserva sesiones separadas por Topic y soporta destinos de cron en ese
+  formato; una comunidad añadiría grupos y permisos innecesarios para un único atleta.
+- **Alternativas:** canal con grupo de discusión; comunidad con varios chats; mantener todas las
+  revisiones en el chat privado original.
+- **Consecuencias:** la conversación y las revisiones quedan ordenadas sin mover secretos al repo;
+  falta validar una entrega real después de un entrenamiento nuevo.
+
+## 2026-08-06 — Una confirmación visible para aplicar una rutina
+
+- **Decisión:** interpretar la petición explícita de crear o mejorar una rutina como aprobación
+  inicial del borrador; mostrar comparación y preview juntas y pedir una única confirmación final
+  antes de `apply_training_plan_to_hevy`.
+- **Motivo:** eliminar la confirmación conversacional redundante sin retirar la preview, el token ni
+  la auditoría interna de aprobación y aplicación.
+- **Alternativas:** mantener dos respuestas separadas; eliminar también la confirmación final.
+- **Consecuencias:** Hermes requiere una sola respuesta afirmativa visible para la escritura exacta;
+  PostgreSQL conserva las dos fases y los fallos inciertos siguen sin reintento automático.
+
+## 2026-08-06 — Recuperar y reconciliar creaciones Hevy por coincidencia estructural
+
+- **Decisión:** tomar una instantánea de IDs antes de crear y, si el `2xx` no valida, confirmar solo
+  una rutina nueva que coincida de forma estructural y única. Exponer reconciliación MCP local para
+  aplicaciones `uncertain`/`partial` mediante lectura directa de Hevy.
+- **Motivo:** Hevy devolvió `201` y creó una rutina, pero el cuerpo no coincidió con el contrato;
+  consultar solo PostgreSQL ocultó el cambio hasta la siguiente sincronización.
+- **Alternativas:** reintentar el POST; confiar en el código 201 sin identificar el recurso; tratar
+  el listado PostgreSQL como reconciliación remota.
+- **Consecuencias:** se evitan duplicados y se identifican las sesiones confirmadas; hay lecturas
+  adicionales en la creación y cualquier coincidencia ambigua permanece bloqueada.
+
+## 2026-08-06 — Skill Hermes enlazada al repositorio
+
+- **Decisión:** instalar `SKILL.md` como enlace simbólico de archivo mediante un script idempotente,
+  conservando como backup cualquier copia previa y ofreciendo `--check`.
+- **Motivo:** las copias manuales dejan fácilmente a Hermes ejecutando contratos antiguos. Hermes
+  descubre archivos enlazados dentro de directorios reales, pero `Path.rglob` no recorre un
+  directorio de skill que sea un enlace.
+- **Alternativas:** copiar después de cada cambio; enlazar el directorio completo; modificar el
+  cargador de Hermes; duplicar la skill en configuración.
+- **Consecuencias:** las ediciones del repositorio se reflejan sin sincronización manual. Sigue
+  haciendo falta reiniciar el gateway para recargar la skill y el subproceso MCP persistente.
+
+## 2026-08-06 — Contrato real y diagnóstico seguro de escritura Hevy
+
+- **Decisión:** enviar `folder_id: null` explícito al crear, validar respuestas bajo `routine` o en
+  forma directa y devolver códigos sanitizados como `hevy_http_403`. Un 2xx cuyo cuerpo no valida
+  queda `uncertain`.
+- **Motivo:** dos intentos reales fueron rechazados sin crear rutinas; el cliente omitía un campo
+  nullable requerido, esperaba una respuesta sin sobre y descartaba el código HTTP útil.
+- **Alternativas:** conservar un error `failed` genérico; registrar el cuerpo completo de Hevy;
+  reintentar automáticamente respuestas inválidas.
+- **Consecuencias:** Hermes puede distinguir rechazo limpio de resultado ambiguo sin ver datos
+  remotos. Antes de otro intento hay que comprobar el límite de cuatro rutinas y emitir una preview
+  y un token nuevos.
+
+## 2026-08-06 — Entrevista longitudinal y nivel derivado del historial
+
+- **Decisión:** ampliar el perfil con antropometría voluntaria, actividad, recuperación, nutrición y
+  salud; guardar mediciones/check-ins e inferir profundidad del historial con confianza y límites.
+- **Motivo:** evitar preguntas redundantes sobre nivel cuando Hevy aporta meses de evidencia, sin
+  confundir historial con técnica.
+- **Alternativas:** conservar un perfil mínimo; dejar la entrevista en memoria de Hermes.
+- **Consecuencias:** PostgreSQL conserva el estado y cada dato sensible se resume y confirma.
+
+## 2026-08-06 — Conocimiento deportivo y nutricional trazable
+
+- **Decisión:** codificar cálculos básicos y un catálogo de reglas con fuente/año/alcance; Hermes
+  puede investigar fuentes primarias cuando el catálogo no baste.
+- **Motivo:** perder grasa exige alimentación y actividad, y el LLM no debe calcular ni presentar
+  recomendaciones generales como hechos personales.
+- **Alternativas:** RAG completo; confiar solo en el conocimiento paramétrico del modelo.
+- **Consecuencias:** no se añade vector store; la nutrición clínica se deriva a profesionales.
+
+## 2026-08-06 — Escritura Hevy con doble confirmación y sin reintento ambiguo
+
+- **Decisión:** permitir POST/PUT de rutinas solo tras propuesta aprobada, preview con hashes, token
+  de un solo uso y segunda confirmación. Antes de un PUT se relee la rutina remota y se rechaza si
+  cambió. Un timeout queda `uncertain` y no se reintenta.
+- **Motivo:** cumplir el control humano y evitar duplicar o sobrescribir rutinas ante fallos de red.
+- **Alternativas:** una sola aprobación; reintentos HTTP; creación manual permanente.
+- **Consecuencias:** un fallo tras crear parte de un plan queda `partial` y exige reconciliación.
+
+## 2026-08-06 — Mantener temporalmente el sondeo como disparador
+
+- **Decisión:** conservar el cron incremental cada cinco minutos para la primera validación real y
+  aplazar la recepción del webhook disponible en la cuenta de Hevy.
+- **Motivo:** el flujo de sondeo ya está implementado y probado; el webhook exige además desplegar un
+  endpoint HTTPS público y gestionar un secreto Bearer y su disponibilidad continua.
+- **Alternativas:** habilitar inmediatamente un túnel temporal; desplegar un endpoint estable con
+  dominio; conectar Hevy al receptor genérico de Hermes pese a la incompatibilidad de autenticación.
+- **Consecuencias:** la primera revisión puede tardar hasta unos seis minutos. El webhook queda como
+  mejora posterior y la cola PostgreSQL permite cambiar el disparador sin rehacer el análisis.
+
+## 2026-08-06 — Eventos incrementales y cron de Hermes para revisiones automáticas
+
+- **Decisión:** sondear cada cinco minutos el feed público `/v1/workouts/events`, persistir cursor y
+  revisiones en PostgreSQL y usar un pre-script de Hermes que solo despierta al agente ante cambios.
+- **Motivo:** la API pública de Hevy no documenta webhooks; Hermes proporciona gate sin modelo,
+  sesiones cron aisladas y entrega directa al canal Telegram configurado.
+- **Alternativas:** usar endpoints privados de webhook; sincronizar siempre la instantánea completa;
+  ejecutar el modelo cada cinco minutos; enviar Telegram directamente desde `gym-coach`.
+- **Consecuencias:** la latencia esperada es inferior a unos seis minutos, no hay coste de inferencia
+  sin cambios y PostgreSQL conserva idempotencia y reintentos. El gateway y el chat de Telegram
+  deben estar operativos; Hevy permanece exclusivamente de lectura.
+
+## 2026-08-06 — Línea base silenciosa y reconocimiento posterior a la revisión
+
+- **Decisión:** el primer sondeo fija el cursor sin revisar históricos; cada evento nuevo se reclama
+  con caducidad de 30 minutos y Hermes lo reconoce solo tras preparar el informe.
+- **Motivo:** evita enviar decenas de revisiones antiguas y permite recuperar ejecuciones que se
+  interrumpan antes de generar contenido.
+- **Alternativas:** marcar todos los entrenamientos previos como entregados; eliminar la cola al
+  reclamar; deduplicar mediante archivos dentro de Hermes.
+- **Consecuencias:** una reclamación abandonada vuelve a estar disponible. Un fallo posterior al
+  reconocimiento pero anterior a la entrega sigue requiriendo inspección del ledger de Hermes.
+
 ## 2026-08-06 — Seguridad explícita y planes tipados
 
 - **Decisión:** exigir que Hermes confirme haber preguntado por limitaciones y preferencias; modelar
@@ -214,3 +346,106 @@
 - **Alternativas:** inferir frecuencia histórica; reglas fijas ocultas; decisión del LLM.
 - **Consecuencias:** cada resultado incluye ventana, objetivo, sesiones, motivo y umbral; cambiar la
   ventana puede cambiar legítimamente la clasificación.
+
+## 2026-08-06 — Avisos del gateway en el Topic Alertas
+
+- **Decisión:** usar el supergrupo privado y su Topic `Alertas` como `TELEGRAM_HOME_CHANNEL` más
+  `TELEGRAM_HOME_CHANNEL_THREAD_ID`; mantener las revisiones automáticas en `Revisiones`.
+- **Motivo:** separar avisos operativos de las conversaciones de entrenamiento y de las revisiones.
+- **Alternativas:** conservar el chat privado como home channel; enviar todos los avisos a
+  `Revisiones`.
+- **Consecuencias:** el ajuste vive en `~/.hermes/.env` y no en Git; el primer arranque después de
+  un reinicio efectivo debe confirmar la entrega en `Alertas`.
+
+## 2026-08-07 — Aviso de restarting también en Alertas
+
+- **Decisión:** mantener los avisos `Gateway restarting` y `Gateway online` en el chat que inició
+  el reinicio y emitirlos además en el home channel configurado, que apunta a `Alertas`.
+- **Motivo:** el aviso es útil como respuesta contextual, pero los eventos operativos deben quedar
+  reunidos en el topic de alertas.
+- **Alternativas:** moverlo exclusivamente a `Alertas`; dejar el comportamiento original de Hermes,
+  que suprimía el home channel para reinicios iniciados dentro de un chat.
+- **Consecuencias:** se aplicó un parche local mínimo en `~/.hermes/hermes-agent/gateway/run.py`;
+  una actualización de Hermes podría sobrescribirlo y requerir reaplicación.
+
+## 2026-08-07 — Recuperación de turnos y arranque de dependencias
+
+- **Decisión:** al recuperarse de una caída, Hermes inspecciona el final persistido de cada
+  conversación y reanuda únicamente los turnos cuyo último elemento sea una entrada de usuario,
+  resultado de herramienta o llamada de herramienta sin finalizar. PostgreSQL usa `unless-stopped`;
+  Ollama queda en el perfil Compose opcional `llm`.
+- **Motivo:** el límite temporal fijo no cubría apagados largos y relanzar conversaciones ya
+  finalizadas produciría duplicados; PostgreSQL debe estar disponible antes del cron y Ollama no es
+  el proveedor activo.
+- **Alternativas:** reanudar todas las sesiones recientes; dejar que el cron informe cada fallo de
+  conexión; arrancar siempre Ollama.
+- **Consecuencias:** se preservan turnos pendientes sin duplicar respuestas terminadas, el primer
+  sondeo tras el arranque puede quedar silencioso hasta que PostgreSQL esté listo y Ollama solo
+  consume recursos cuando se activa explícitamente el perfil.
+
+## 2026-08-07 — Normalización de respuestas de escritura Hevy
+
+- **Decisión:** aceptar `routine` como objeto o como lista de exactamente un elemento en las
+  respuestas de rutinas; rechazar listas de tamaño distinto de uno.
+- **Motivo:** la respuesta real observada en `PUT /v1/routines/{id}` usa el envoltorio de lista,
+  aunque el lector y algunas respuestas de escritura usan un objeto. Una lista ambigua no puede
+  asociarse de forma segura a la rutina solicitada.
+- **Alternativas:** aceptar cualquier lista y elegir el primero; tratar toda respuesta como incierta.
+- **Consecuencias:** las actualizaciones válidas dejan de clasificarse erróneamente como inciertas,
+  conservando el bloqueo seguro ante payloads ambiguos.
+
+## 2026-08-07 — Reconciliación de actualizaciones por lectura exacta
+
+- **Decisión:** para una aplicación `update`, leer `source_routine_id` y comparar en Python todos
+  los campos controlados con el plan aprobado; usar el feed completo solo para `create`.
+- **Motivo:** una actualización no crea una rutina reciente y no puede reconciliarse buscando por
+  `created_at`; la lectura directa evita falsos positivos y no escribe nada.
+- **Alternativas:** mantener reconciliación solo para creaciones; volver a enviar el `PUT`.
+- **Consecuencias:** un resultado incierto puede marcarse aplicado solo ante coincidencia exacta;
+  cualquier discrepancia sigue requiriendo una propuesta y token nuevos.
+
+## 2026-08-07 — Política de modelos Hermes
+
+- **Decisión:** mantener `gpt-5.6-luna` con `high` como predeterminado y cambiar explícitamente a
+  `gpt-5.6-terra` en turnos complejos mientras no exista un router probado.
+- **Motivo:** Hermes ofrece fallback por errores, no selección por complejidad; cambiar de modelo
+  durante una conversación rompe la caché y una heurística no validada puede aumentar coste o
+  degradar seguridad.
+- **Alternativas:** usar fallback como selector; añadir un clasificador LLM en el gateway.
+- **Consecuencias:** comportamiento predecible y barato ahora; el enrutamiento automático queda
+  aplazado a un hito con métricas de coste, latencia y calidad.
+
+## 2026-08-07 — Sincronización posterior a escrituras Hevy
+
+- **Decisión:** después de una creación o actualización confirmada, ejecutar una instantánea
+  completa de Hevy y devolver `sync_status` junto con el resultado de la aplicación. Las
+  reconciliaciones que confirman recursos remotos también sincronizan.
+- **Motivo:** PostgreSQL debe reflejar automáticamente el estado remoto y no depender de que el
+  atleta ejecute `gym-coach hevy sync` manualmente.
+- **Alternativas:** actualizar solo la fila afectada; esperar al cron; ejecutar sincronización antes
+  de cada lectura.
+- **Consecuencias:** una escritura puede tardar más y descarga también entrenamientos/plantillas,
+  pero conserva el snapshot como fuente de verdad local. Si la sincronización falla, la escritura
+  remota no se reintenta y queda visible como `sync_status=failed`.
+
+## 2026-08-07 — Confirmación interactiva de aplicaciones
+
+- **Decisión:** Hermes debe usar `clarify` con dos elecciones visibles, aprobar o denegar, para la
+  confirmación final antes de llamar al MCP de escritura; el texto queda como fallback.
+- **Motivo:** reducir errores y fricción al autorizar cambios sin eliminar la preview exacta ni la
+  auditoría del backend.
+- **Alternativas:** exigir siempre una palabra escrita; eliminar la confirmación final; delegarla en
+  el modelo sin una interacción del atleta.
+- **Consecuencias:** Telegram puede mostrar botones inline mediante la skill enlazada; otras
+  interfaces pueden presentar las mismas elecciones como lista o texto.
+
+## 2026-08-07 — Reparación manual de sincronización desde MCP
+
+- **Decisión:** exponer `sync_hevy` como herramienta MCP local, idempotente y protegida por
+  confirmación, para ejecutar una instantánea completa de Hevy en PostgreSQL sin modificar Hevy.
+- **Motivo:** una sincronización posterior puede fallar cuando no hay nuevos eventos que despierten
+  el cron; el atleta necesita una recuperación desde Telegram sin acceder a la CLI.
+- **Alternativas:** depender solo del cron; ejecutar comandos shell desde Hermes; actualizar solo la
+  rutina afectada.
+- **Consecuencias:** existe un fallback observable con contadores y `run_id`; sigue siendo una
+  operación local confirmada y no sustituye los reintentos automáticos futuros.

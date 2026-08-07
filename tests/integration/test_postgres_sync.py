@@ -1,6 +1,6 @@
 import os
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -15,6 +15,7 @@ from psycopg import sql
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import func, select
 
+from gym_coach.automation.repository import AutomationRepository
 from gym_coach.coach.management import CoachManagementService
 from gym_coach.coach.schemas import AthleteProfileInput, TrainingGoalInput
 from gym_coach.coach.service import CoachService
@@ -75,6 +76,57 @@ def test_migration_upgrade_and_downgrade(postgres_database: str) -> None:
     command.upgrade(config, "head")
     command.downgrade(config, "base")
     command.upgrade(config, "head")
+
+
+async def test_automatic_workout_review_queue_is_idempotent_and_recoverable(
+    postgres_database: str,
+) -> None:
+    command.upgrade(_alembic_config(), "head")
+    engine = create_engine(postgres_database)
+    factory = create_session_factory(engine)
+    now = datetime(2026, 8, 6, 12, tzinfo=UTC)
+
+    async with factory.begin() as session:
+        repository = AutomationRepository(session)
+        assert await repository.initialize_cursor("hevy_workouts", now)
+        assert not await repository.initialize_cursor("hevy_workouts", now)
+        await repository.enqueue_workout("anonymous-workout")
+        await repository.enqueue_workout("anonymous-workout")
+
+    async with factory.begin() as session:
+        claimed = await AutomationRepository(session).claim_next(
+            now=now, stale_after=timedelta(minutes=30)
+        )
+        assert claimed is not None
+        review_id = claimed.id
+        assert claimed.attempt_count == 1
+
+    async with factory.begin() as session:
+        assert (
+            await AutomationRepository(session).claim_next(
+                now=now + timedelta(minutes=1), stale_after=timedelta(minutes=30)
+            )
+            is None
+        )
+
+    retry_at = now + timedelta(minutes=31)
+    async with factory.begin() as session:
+        retried = await AutomationRepository(session).claim_next(
+            now=retry_at, stale_after=timedelta(minutes=30)
+        )
+        assert retried is not None
+        assert retried.id == review_id
+        assert retried.attempt_count == 2
+        completed = await AutomationRepository(session).complete(review_id, completed_at=retry_at)
+        assert completed is not None
+        assert completed.status == "completed"
+
+    async with factory.begin() as session:
+        assert (
+            await AutomationRepository(session).complete(review_id, completed_at=retry_at) is None
+        )
+
+    await engine.dispose()
 
 
 @respx.mock
@@ -202,6 +254,9 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
             {
                 "profile": {
                     "experience_level": "intermediate",
+                    "birth_year": 1990,
+                    "sex_for_energy_equation": "male",
+                    "height_cm": "180",
                     "training_days_per_week": 4,
                 },
                 "user_confirmed": False,
@@ -219,6 +274,12 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
                     "preferences": ["four sessions"],
                     "limitations_reviewed": True,
                     "preferences_reviewed": True,
+                    "lifestyle_reviewed": True,
+                    "nutrition_reviewed": True,
+                    "health_reviewed": True,
+                    "occupation_activity": "sedentary",
+                    "sleep_hours": 7.5,
+                    "dietary_pattern": "omnivore",
                 },
                 "user_confirmed": True,
             },
@@ -228,6 +289,9 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
             {
                 "profile": {
                     "experience_level": "intermediate",
+                    "birth_year": 1990,
+                    "sex_for_energy_equation": "male",
+                    "height_cm": "180",
                     "training_days_per_week": 4,
                     "session_duration_minutes": 60,
                     "equipment": ["full gym"],
@@ -235,6 +299,12 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
                     "preferences": ["four sessions", "balanced progression"],
                     "limitations_reviewed": True,
                     "preferences_reviewed": True,
+                    "lifestyle_reviewed": True,
+                    "nutrition_reviewed": True,
+                    "health_reviewed": True,
+                    "occupation_activity": "sedentary",
+                    "sleep_hours": 7.5,
+                    "dietary_pattern": "omnivore",
                 },
                 "user_confirmed": True,
             },
@@ -262,6 +332,26 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
                 "user_confirmed": True,
             },
         )
+        measurement = await mcp_client.call_tool(
+            "save_confirmed_athlete_measurement",
+            {
+                "measurement": {"measured_on": "2026-08-06", "weight_kg": "80"},
+                "user_confirmed": True,
+            },
+        )
+        check_in = await mcp_client.call_tool(
+            "save_confirmed_athlete_check_in",
+            {
+                "check_in": {
+                    "checked_on": "2026-08-06",
+                    "sleep_quality": 4,
+                    "energy_level": 4,
+                    "training_adherence": 5,
+                },
+                "user_confirmed": True,
+            },
+        )
+        coaching = await mcp_client.call_tool("get_coaching_assessment", {})
         metrics = await mcp_client.call_tool("get_training_metrics", {"window_days": 28})
         assert metrics.structured_content is not None
         evidence_id = metrics.structured_content["evidence_id"]
@@ -321,6 +411,11 @@ async def test_mcp_confirmed_onboarding_metrics_and_local_plan_cycle(
     assert first_goal.structured_content["goal_version"] == 1
     assert revised_goal.structured_content is not None
     assert revised_goal.structured_content["goal_version"] == 2
+    assert measurement.structured_content is not None
+    assert check_in.structured_content is not None
+    assert coaching.structured_content is not None
+    assert coaching.structured_content["protein_range_g_per_day"] == [112, 160]
+    assert coaching.structured_content["history"]["history_level"] == "insufficient"
     assert comparison.structured_content is not None
     assert comparison.structured_content["changes_are_applied"] is False
     assert decision.structured_content is not None
@@ -505,6 +600,9 @@ async def test_full_sync_is_idempotent_and_traces_deletions(postgres_database: s
                     "preferences": [],
                     "limitations_reviewed": True,
                     "preferences_reviewed": True,
+                    "lifestyle_reviewed": True,
+                    "nutrition_reviewed": True,
+                    "health_reviewed": True,
                 },
                 "user_confirmed": True,
             },
@@ -555,6 +653,19 @@ async def test_full_sync_is_idempotent_and_traces_deletions(postgres_database: s
             "compare_training_plan_proposal",
             {"proposal_id": plan_draft.structured_content["proposal_id"]},
         )
+        approved_plan = await mcp_client.call_tool(
+            "decide_training_plan_proposal",
+            {
+                "proposal_id": plan_draft.structured_content["proposal_id"],
+                "decision": "approved",
+                "user_confirmed": True,
+            },
+        )
+        assert approved_plan.structured_content is not None
+        application_preview = await mcp_client.call_tool(
+            "preview_training_plan_application",
+            {"proposal_id": plan_draft.structured_content["proposal_id"]},
+        )
 
     assert routines.structured_content is not None
     assert routines.structured_content["count"] == 1
@@ -567,6 +678,10 @@ async def test_full_sync_is_idempotent_and_traces_deletions(postgres_database: s
     assert templates.structured_content is not None
     assert templates.structured_content["count"] == 1
     assert detailed_comparison.structured_content is not None
+    assert application_preview.structured_content is not None
+    assert application_preview.structured_content["action"] == "update"
+    assert application_preview.structured_content["source_routine_id"] == "routine-1"
+    assert application_preview.structured_content["confirmation_token"]
     assert detailed_comparison.structured_content["exercise_changes"] == [
         {
             "exercise_template_external_id": "template-1",

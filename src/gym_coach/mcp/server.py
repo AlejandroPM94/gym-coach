@@ -10,35 +10,50 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from gym_coach.config import Settings, get_settings
 from gym_coach.db import create_engine, create_session_factory
 from gym_coach.integrations.hevy.client import HevyClient
+from gym_coach.integrations.hevy.raw_store import RawResponseStore
 from gym_coach.mcp.errors import GymCoachMCPError, InternalToolError
 from gym_coach.mcp.instructions import MCP_INSTRUCTIONS
 from gym_coach.mcp.repository import PostgresMCPRepository
 from gym_coach.mcp.schemas import (
+    AthleteCheckInInput,
+    AthleteCheckInView,
+    AthleteMeasurementInput,
+    AthleteMeasurementView,
     AthleteProfileUpdate,
     AthleteSummary,
+    CoachingAssessment,
     ExerciseProgressReport,
     ExerciseTemplateSearchResults,
     GoalMutationResult,
     HevyConnectionStatus,
+    HevySyncResult,
     OnboardingStatus,
     PlanDecisionResult,
     ProfileMutationResult,
     RecentWorkouts,
+    RoutineApplicationPreview,
+    RoutineApplicationReconciliationResult,
+    RoutineApplicationResult,
     RoutineList,
     SystemStatus,
     TrainingGoalUpdate,
+    TrainingHistoryAssessment,
     TrainingMetrics,
     TrainingPlanComparison,
     TrainingPlanProposal,
     TrainingPlanProposalInput,
     TrainingRoutine,
     TrainingWorkout,
+    WorkoutReviewAcknowledgement,
 )
 from gym_coach.mcp.tools import MCPTools
 from gym_coach.metrics.service import MetricsService
+from gym_coach.sync.hevy import HevySyncService
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
 WRITE_LOCAL = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
+SYNC_LOCAL = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True)
+WRITE_HEVY = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False)
 
 
 def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
@@ -60,6 +75,11 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
         """Check Hevy configuration and accessibility without exposing credentials."""
         return await _safe(tools.get_hevy_connection_status())
 
+    @server.tool(annotations=SYNC_LOCAL)
+    async def sync_hevy(user_confirmed: Literal[True]) -> HevySyncResult:
+        """Synchronize a complete Hevy snapshot into PostgreSQL after explicit confirmation."""
+        return await _safe(tools.sync_hevy(user_confirmed=user_confirmed))
+
     @server.tool(annotations=READ_ONLY)
     async def get_athlete_summary() -> AthleteSummary:
         """Return the minimal structured athlete profile and active goals."""
@@ -70,6 +90,16 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
         """Return missing profile fields and the next safe onboarding action."""
         return await _safe(tools.get_onboarding_status())
 
+    @server.tool(annotations=READ_ONLY)
+    async def get_training_history_assessment() -> TrainingHistoryAssessment:
+        """Infer training-history depth from normalized workouts, with confidence and limits."""
+        return await _safe(tools.get_training_history_assessment())
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_coaching_assessment() -> CoachingAssessment:
+        """Return deterministic interview gaps, history, nutrition ranges, and sourced rules."""
+        return await _safe(tools.get_coaching_assessment())
+
     @server.tool(annotations=WRITE_LOCAL)
     async def save_confirmed_athlete_profile(
         profile: AthleteProfileUpdate, user_confirmed: Literal[True]
@@ -77,6 +107,24 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
         """Save a profile after explicit safety/preference review and summary confirmation."""
         return await _safe(
             tools.save_confirmed_athlete_profile(profile, user_confirmed=user_confirmed)
+        )
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def save_confirmed_athlete_measurement(
+        measurement: AthleteMeasurementInput, user_confirmed: Literal[True]
+    ) -> AthleteMeasurementView:
+        """Store a dated measurement only after the athlete confirms the exact values."""
+        return await _safe(
+            tools.save_confirmed_athlete_measurement(measurement, user_confirmed=user_confirmed)
+        )
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def save_confirmed_athlete_check_in(
+        check_in: AthleteCheckInInput, user_confirmed: Literal[True]
+    ) -> AthleteCheckInView:
+        """Store a dated wellbeing and adherence check-in after explicit confirmation."""
+        return await _safe(
+            tools.save_confirmed_athlete_check_in(check_in, user_confirmed=user_confirmed)
         )
 
     @server.tool(annotations=WRITE_LOCAL)
@@ -166,6 +214,45 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
             )
         )
 
+    @server.tool(annotations=WRITE_LOCAL)
+    async def preview_training_plan_application(
+        proposal_id: UUID,
+    ) -> RoutineApplicationPreview:
+        """Prepare an exact approved Hevy write and issue a one-time confirmation token."""
+        return await _safe(tools.preview_training_plan_application(proposal_id))
+
+    @server.tool(annotations=WRITE_HEVY)
+    async def apply_training_plan_to_hevy(
+        proposal_id: UUID,
+        confirmation_token: str,
+        user_confirmed: Literal[True],
+    ) -> RoutineApplicationResult:
+        """Apply the previewed plan and automatically sync PostgreSQL from Hevy."""
+        return await _safe(
+            tools.apply_training_plan_to_hevy(
+                proposal_id,
+                confirmation_token,
+                user_confirmed=user_confirmed,
+            )
+        )
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def reconcile_training_plan_application(
+        proposal_id: UUID,
+        user_confirmed: Literal[True],
+    ) -> RoutineApplicationReconciliationResult:
+        """Compare an uncertain attempt with live Hevy and sync PostgreSQL if confirmed."""
+        return await _safe(
+            tools.reconcile_training_plan_application(proposal_id, user_confirmed=user_confirmed)
+        )
+
+    @server.tool(annotations=WRITE_LOCAL)
+    async def acknowledge_automatic_workout_review(
+        review_id: UUID,
+    ) -> WorkoutReviewAcknowledgement:
+        """Mark a claimed automatic review complete after its Telegram brief is prepared."""
+        return await _safe(tools.acknowledge_automatic_workout_review(review_id))
+
     return server
 
 
@@ -181,15 +268,21 @@ def build_mcp_tools(settings: Settings) -> tuple[MCPTools, AsyncEngine]:
             timeout_seconds=settings.hevy_timeout_seconds,
             retry_attempts=settings.hevy_retry_attempts,
             retry_backoff_seconds=settings.hevy_retry_backoff_seconds,
+            raw_store=RawResponseStore(settings.raw_data_dir),
         )
 
     session_factory = create_session_factory(engine)
     repository = PostgresMCPRepository(session_factory)
+
+    def hevy_sync_factory() -> HevySyncService:
+        return HevySyncService(hevy_client_factory(), session_factory)
+
     return MCPTools(
         settings,
         repository,
         MetricsService(session_factory),
         hevy_client_factory,
+        hevy_sync_factory,
     ), engine
 
 

@@ -139,6 +139,11 @@ def _map_routine(routine: Routine) -> RoutineRecord:
     )
 
 
+def routine_content_hash(routine: Routine) -> str:
+    """Return the same provider-content hash persisted by a full synchronization."""
+    return _map_routine(routine).content_hash
+
+
 def _map_workout(workout: Workout) -> WorkoutRecord:
     exercises = tuple(_map_exercise(item) for item in workout.exercises)
     values = {

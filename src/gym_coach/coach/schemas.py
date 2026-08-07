@@ -11,7 +11,10 @@ class StrictModel(BaseModel):
 
 
 class AthleteProfileInput(StrictModel):
-    experience_level: Literal["beginner", "intermediate", "advanced"]
+    experience_level: Literal["beginner", "intermediate", "advanced"] | None = None
+    birth_year: Annotated[int | None, Field(ge=1900, le=2100)] = None
+    sex_for_energy_equation: Literal["female", "male", "unspecified"] = "unspecified"
+    height_cm: Annotated[Decimal | None, Field(ge=100, le=250)] = None
     training_days_per_week: Annotated[int, Field(ge=1, le=7)]
     session_duration_minutes: Annotated[int | None, Field(ge=15, le=300)] = None
     equipment: list[str] = Field(default_factory=list, max_length=50)
@@ -19,6 +22,21 @@ class AthleteProfileInput(StrictModel):
     preferences: list[str] = Field(default_factory=list, max_length=30)
     limitations_reviewed: bool = False
     preferences_reviewed: bool = False
+    occupation_activity: Literal["sedentary", "light", "moderate", "high"] | None = None
+    average_daily_steps: Annotated[int | None, Field(ge=0, le=100_000)] = None
+    sleep_hours: Annotated[float | None, Field(ge=0, le=24)] = None
+    sleep_quality: Annotated[int | None, Field(ge=1, le=5)] = None
+    stress_level: Annotated[int | None, Field(ge=1, le=5)] = None
+    dietary_pattern: Annotated[str | None, Field(max_length=64)] = None
+    dietary_restrictions: list[str] = Field(default_factory=list, max_length=30)
+    food_allergies: list[str] = Field(default_factory=list, max_length=30)
+    nutrition_preferences: list[str] = Field(default_factory=list, max_length=30)
+    nutrition_tracking_preference: Literal["none", "habits", "portions", "calories"] | None = None
+    health_conditions: list[str] = Field(default_factory=list, max_length=30)
+    medications_affecting_training: list[str] = Field(default_factory=list, max_length=30)
+    lifestyle_reviewed: bool = False
+    nutrition_reviewed: bool = False
+    health_reviewed: bool = False
 
 
 class AthleteProfileView(AthleteProfileInput):
@@ -27,7 +45,16 @@ class AthleteProfileView(AthleteProfileInput):
 
 
 class TrainingGoalInput(StrictModel):
-    goal_type: Literal["strength", "hypertrophy", "endurance", "health", "skill", "other"]
+    goal_type: Literal[
+        "strength",
+        "hypertrophy",
+        "fat_loss",
+        "body_recomposition",
+        "endurance",
+        "health",
+        "skill",
+        "other",
+    ]
     description: Annotated[str, Field(min_length=3, max_length=1000)]
     priority: Annotated[int, Field(ge=1, le=5)] = 1
     target_date: date | None = None
@@ -41,7 +68,7 @@ class TrainingGoalView(TrainingGoalInput):
 
 class EvidenceFact(StrictModel):
     id: Annotated[str, Field(pattern=r"^[a-z0-9_.:-]+$")]
-    category: Literal["profile", "goal", "routine", "metric"]
+    category: Literal["profile", "goal", "routine", "metric", "history"]
     description: str
     value: str
     unit: str | None = None
@@ -121,6 +148,9 @@ class ProposedExercise(StrictModel):
     rest_seconds: Annotated[int, Field(ge=0, le=900)]
     sets: Annotated[list[ProposedSet], Field(min_length=1, max_length=20)]
     notes: str | None = None
+    superset_group: Annotated[
+        str | None, Field(default=None, min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_.:-]+$")
+    ] = None
 
 
 class ProposedWorkout(StrictModel):
@@ -129,6 +159,19 @@ class ProposedWorkout(StrictModel):
     optional: bool = False
     location: Literal["gym", "home", "outdoors", "other"] = "gym"
     estimated_duration_minutes: Annotated[int | None, Field(ge=5, le=300)] = None
+
+    @model_validator(mode="after")
+    def validate_superset_groups(self) -> "ProposedWorkout":
+        groups: dict[str, list[int]] = {}
+        for index, exercise in enumerate(self.exercises):
+            if exercise.superset_group is not None:
+                groups.setdefault(exercise.superset_group, []).append(index)
+        for group, indexes in groups.items():
+            if len(indexes) < 2:
+                raise ValueError(f"superset_group {group!r} must contain at least two exercises")
+            if indexes != list(range(indexes[0], indexes[-1] + 1)):
+                raise ValueError(f"superset_group {group!r} must be contiguous")
+        return self
 
 
 class PlanChangeJustification(StrictModel):

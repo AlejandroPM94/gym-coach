@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 class HevyModel(BaseModel):
@@ -85,8 +85,46 @@ class WorkoutPage(PageMetadata):
     workouts: list[Workout]
 
 
+class UpdatedWorkoutEvent(HevyModel):
+    type: Literal["updated"]
+    workout: Workout
+
+
+class DeletedWorkoutEvent(HevyModel):
+    type: Literal["deleted"]
+    id: str
+    deleted_at: datetime
+
+
+WorkoutEvent = Annotated[
+    UpdatedWorkoutEvent | DeletedWorkoutEvent,
+    Field(discriminator="type"),
+]
+
+
+class WorkoutEventPage(PageMetadata):
+    events: list[WorkoutEvent] = Field(
+        validation_alias=AliasChoices("workouts", "events"),
+        serialization_alias="workouts",
+    )
+
+
 class RoutinePage(PageMetadata):
     routines: list[Routine]
+
+
+class RoutineResponse(HevyModel):
+    routine: Routine
+
+    @field_validator("routine", mode="before")
+    @classmethod
+    def _accept_single_item_list(cls, value: object) -> object:
+        """Accept Hevy's object and one-item-list response variants."""
+        if isinstance(value, list):
+            if len(value) != 1:
+                raise ValueError("routine response list must contain exactly one item")
+            return value[0]
+        return value
 
 
 class ExerciseTemplatePage(PageMetadata):
@@ -94,3 +132,34 @@ class ExerciseTemplatePage(PageMetadata):
 
 
 JsonObject = dict[str, Any]
+
+
+class RoutineWriteSet(HevyModel):
+    set_type: Literal["warmup", "normal", "failure", "dropset"] = Field(
+        default="normal", serialization_alias="type"
+    )
+    weight_kg: float | None = None
+    reps: int | None = None
+    distance_meters: int | None = None
+    duration_seconds: int | None = None
+    custom_metric: float | None = None
+    rep_range: RepRange | None = None
+
+
+class RoutineWriteExercise(HevyModel):
+    exercise_template_id: str
+    superset_id: int | None = None
+    rest_seconds: int | None = None
+    notes: str | None = None
+    sets: list[RoutineWriteSet]
+
+
+class RoutineWriteData(HevyModel):
+    title: str
+    folder_id: int | None = None
+    notes: str | None = None
+    exercises: list[RoutineWriteExercise]
+
+
+class RoutineWriteRequest(HevyModel):
+    routine: RoutineWriteData

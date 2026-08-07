@@ -22,7 +22,12 @@ interpretación separada y aprobación humana antes de modificar rutinas.
    métricas deterministas y propuestas locales aprobables, sin escritura en Hevy.
 7. **Contratos de planificación robustos (completada):** revisión explícita de seguridad,
    evidencias verificadas por cambio, prescripciones tipadas y diff determinista.
-8. **Canales y datos adicionales:** Samsung Health/Health Connect, nutrición y Telegram/app propia,
+8. **Revisión automática post-entrenamiento (en validación):** eventos incrementales de Hevy,
+   cola PostgreSQL y entrega mediante el cron de Hermes a Telegram.
+9. **Coaching integral y aplicación Hevy (completada):** entrevista intensiva, nivel derivado del
+   historial, mediciones/check-ins, reglas de entrenamiento/nutrición trazables y escritura de
+   rutinas con doble confirmación.
+10. **Canales y datos adicionales:** Samsung Health/Health Connect y Telegram/app propia,
    cada integración desacoplada y con consentimiento explícito.
 
 ## Decisiones iniciales
@@ -43,11 +48,14 @@ interpretación separada y aprobación humana antes de modificar rutinas.
   de validación describen rutas y tipos, pero nunca reproducen valores recibidos.
 - Hermes es el orquestador conversacional inicial y utiliza `gym-coach` mediante MCP `stdio`.
   PostgreSQL conserva la verdad estructurada y Hermes no sustituye métricas ni estado con memoria.
-- PydanticAI queda como extra experimental recuperable para alternativas o evaluaciones y no
-  dispone de herramientas de escritura. Aprobar sigue siendo una transición local, no una
-  aplicación en Hevy.
+- PydanticAI queda como extra experimental. Hermes puede aplicar un plan en Hevy únicamente después
+  de aprobación local, previsualización exacta, segunda confirmación y token de un solo uso.
 - Hermes puede persistir perfil, objetivos y decisiones mediante herramientas MCP locales que
   exigen confirmación explícita. Las actualizaciones de perfil conservan instantáneas versionadas y
   las revisiones de objetivos archivan la versión sustituida.
 - El backend distingue perfil no preguntado de una respuesta explícita sin limitaciones, verifica de
   nuevo toda evidencia al crear un borrador y calcula el diff de ejercicios, series y musculatura.
+- El historial infiere profundidad y confianza, no competencia técnica. IMC, energía basal y rango
+  de proteína se calculan en Python; las recomendaciones conservan fuente, año, alcance y límites.
+- Hevy no publica webhooks en su API documentada: los entrenamientos nuevos se detectan por sondeo
+  incremental con solapamiento, cursor persistente e idempotencia por ID externo.

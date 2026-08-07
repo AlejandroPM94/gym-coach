@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from gym_coach.automation.service import WorkoutReviewAutomationService
 from gym_coach.coach.errors import CoachError
 from gym_coach.coach.management import CoachManagementService
 from gym_coach.coach.schemas import AthleteProfileInput, TrainingGoalInput
@@ -77,6 +78,28 @@ async def _sync(settings: Settings, _: argparse.Namespace) -> str:
     return (
         f"Synchronized Hevy (run {result.run_id}): inserted={counts.inserted}, "
         f"updated={counts.updated}, unchanged={counts.unchanged}, deleted={counts.deleted}."
+    )
+
+
+async def _poll_hevy_automation(settings: Settings, _: argparse.Namespace) -> str:
+    engine = create_engine(settings.database_url)
+    try:
+        async with _client(settings) as client:
+            gate = await WorkoutReviewAutomationService(
+                client, create_session_factory(engine)
+            ).poll()
+    finally:
+        await engine.dispose()
+    if not gate.wake_agent:
+        return json.dumps({"wakeAgent": False})
+    return json.dumps(
+        {
+            "wakeAgent": True,
+            "context": {
+                "review_id": str(gate.review_id),
+                "workout_id": gate.workout_id,
+            },
+        }
     )
 
 
@@ -229,6 +252,12 @@ def _parser() -> argparse.ArgumentParser:
         command.set_defaults(handler=handler)
         if name == "workouts":
             command.add_argument("--limit", type=int, default=10)
+    automation = groups.add_parser("automation", help="Controlled background automation")
+    automation_commands = automation.add_subparsers(dest="command", required=True)
+    poll_hevy = automation_commands.add_parser(
+        "poll-hevy", help="Poll workout events and gate an automatic review"
+    )
+    poll_hevy.set_defaults(handler=_poll_hevy_automation)
     metrics = groups.add_parser("metrics", help="Deterministic sports metrics")
     metric_commands = metrics.add_subparsers(dest="command", required=True)
     summary = metric_commands.add_parser("summary")

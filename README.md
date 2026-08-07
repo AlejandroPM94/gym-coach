@@ -1,7 +1,8 @@
 # gym-coach
 
-Entrenador personal asistido por IA con sincronización Hevy de solo lectura, métricas
-deterministas y propuestas estructuradas que requieren aprobación humana.
+Entrenador personal asistido por IA con sincronización Hevy, métricas deterministas, entrevista
+longitudinal y propuestas estructuradas. Toda aplicación de rutina exige una confirmación final sobre
+una preview exacta.
 
 ## Requisitos e instalación
 
@@ -15,6 +16,14 @@ uv sync
 cp .env.example .env
 # Edita .env localmente y define las claves necesarias; no las pegues en logs ni en Git.
 docker compose up -d postgres
+```
+
+PostgreSQL usa `restart: unless-stopped`, por lo que vuelve a arrancar cuando Docker Desktop
+se inicia. En Docker Desktop activa también “Start Docker Desktop when you sign in”. Ollama está
+en el perfil opcional `llm` y no se inicia con el comando anterior; actívalo solo si se necesita:
+
+```bash
+docker compose --profile llm up -d ollama
 ```
 
 `HEVY_API_KEY` solo es necesaria para comprobar o sincronizar Hevy. El servidor MCP y las consultas
@@ -68,6 +77,7 @@ src/gym_coach/
 ├── api/                  # routers HTTP, sin lógica de proveedor
 ├── integrations/hevy/    # cliente, esquemas, errores y almacenamiento raw
 ├── coach/                # contratos, agente PydanticAI y reglas de evidencia/aprobación
+├── coaching/             # evaluación histórica, cálculos antropométricos y reglas con fuentes
 ├── mcp/                  # contratos públicos y herramientas MCP controladas para Hermes
 ├── metrics/              # cálculos deportivos deterministas
 ├── persistence/          # modelos y repositorios PostgreSQL
@@ -78,12 +88,17 @@ src/gym_coach/
 ```
 
 PostgreSQL es la fuente de verdad. El JSON crudo no sustituye la persistencia normalizada. El
-cliente Hevy es async, inyectable y aislado; valida respuestas,
-traduce fallos HTTP/timeouts a errores propios y pagina explícitamente. No contiene operaciones
-de escritura. Consulta la visión y fases en `PROJECT_BRIEF.md`.
+cliente Hevy es async, inyectable y aislado; valida respuestas, traduce fallos HTTP/timeouts a
+errores propios y pagina explícitamente. Crear o actualizar rutinas solo es accesible tras el flujo
+auditado de propuesta, previsualización y confirmación final. En creación envía explícitamente
+`folder_id: null` para la carpeta predeterminada y acepta la respuesta documentada bajo `routine`,
+además de la forma directa observada en algunos endpoints/versiones. Los fallos de escritura exponen
+solo un código seguro como `hevy_http_403`; nunca reproducen el cuerpo remoto. Consulta
+`PROJECT_BRIEF.md`.
 
 El estado operativo, el trabajo priorizado y las decisiones se mantienen en
 `docs/PROJECT_STATE.md`, `docs/NEXT_STEPS.md` y `docs/DECISIONS.md`.
+Las fórmulas, fuentes y límites del asesoramiento están en `docs/COACHING_KNOWLEDGE.md`.
 
 ## Sincronización y recuperación
 
@@ -107,18 +122,17 @@ dominios válidos y reglas de estancamiento están documentados en `docs/METRICS
 ## Entrenador IA
 
 Hermes es el orquestador conversacional principal inicial. Arranca `gym-coach` por `stdio`, descubre
-18 herramientas MCP y recibe contratos Pydantic independientes de Hevy y del ORM. Trece son de
-lectura; las cinco mutaciones solo guardan perfil, objetivos, borradores y decisiones locales bajo
-confirmación o petición explícita. La instalación y configuración están en `docs/HERMES_SETUP.md`.
+27 herramientas MCP y recibe contratos Pydantic independientes de Hevy y del ORM. Incluyen una
+entrevista ampliada, evaluación histórica, mediciones/check-ins y el flujo controlado de aplicación
+en Hevy. La instalación y configuración están en `docs/HERMES_SETUP.md`.
 
 La integración PydanticAI existente se conserva como extra experimental para alternativas o
 evaluaciones. Se instala con `uv sync --extra pydanticai`; admite Ollama local u OpenAI, pero no es
 necesaria para FastAPI, sincronización, métricas, perfiles ni MCP.
 
-Cada hallazgo y propuesta referencia evidencias internas. Las propuestas se guardan como
-`draft`; `coach approve` y `coach reject` solo registran la decisión en PostgreSQL y nunca escriben
-en Hevy. No se conservan prompts, conversaciones ni respuestas brutas del proveedor. Consulta el
-contrato y las limitaciones en `docs/COACH.md`.
+Cada hallazgo y propuesta referencia evidencias internas. La CLI experimental `coach approve` solo
+registra una decisión local. En MCP, aplicar exige además una previsualización ligada al hash exacto
+y una confirmación final con token. No se conservan transcripciones ni respuestas brutas.
 
 ## MCP y Hermes
 
@@ -127,13 +141,35 @@ uv run gym-coach mcp --help
 uv run gym-coach mcp
 ```
 
-El segundo comando reserva stdout para el protocolo MCP. Hevy sigue siendo exclusivamente de
-lectura. Antes de guardar un perfil, objetivo o decisión, Hermes debe mostrar el resumen exacto y
-obtener confirmación explícita; aprobar una propuesta nunca la aplica en Hevy. Consulta los
-contratos y el flujo manual en `docs/HERMES_SETUP.md`.
+El segundo comando reserva stdout para el protocolo MCP. Hermes agrupa la entrevista y muestra un
+resumen exacto con una confirmación por bloque persistido. Para rutinas, la petición explícita del
+atleta aprueba el borrador; comparación y preview se muestran juntas y solo se pide una confirmación
+final para la escritura exacta en Hevy.
+Una respuesta de creación `2xx` no interpretable se contrasta con una instantánea remota; las
+aplicaciones inciertas o parciales disponen de reconciliación explícita y nunca se reintentan enteras.
 
-El onboarding obliga a revisar explícitamente molestias/limitaciones y preferencias, incluso cuando
-la respuesta sea «ninguna». Los planes distinguen sesiones obligatorias y opcionales, ubicación,
+Las propuestas pueden declarar superseries mediante `superset_group`; los ejercicios consecutivos
+con el mismo grupo se envían a Hevy con un `superset_id` compartido.
+
+La skill puede enlazarse una sola vez al repositorio con
+`./integrations/hermes/scripts/link-gym-coach-skill.sh --link`. Las modificaciones posteriores no
+requieren otra copia; basta reiniciar el gateway para recargar la skill y el proceso MCP.
+
+El onboarding usa primero el historial para no pedir un nivel autodeclarado cuando puede inferir la
+profundidad de entrenamiento. Revisa objetivos, salud, mediciones, actividad, recuperación,
+alimentación, limitaciones y preferencias. Los planes distinguen sesiones obligatorias y ubicación,
 duración estimada y objetivos por repeticiones, tiempo o distancia. Cada cambio cita evidencias que
 el backend vuelve a calcular o validar; las comparaciones de ejercicios, series y grupos musculares
 se realizan de forma determinista en Python.
+
+## Revisión automática post-entrenamiento
+
+`uv run gym-coach automation poll-hevy` consulta el feed incremental público de Hevy. La primera
+ejecución crea una línea base silenciosa; las siguientes sincronizan solo cuando existen eventos y
+despiertan a Hermes una vez por entrenamiento nuevo mediante una cola PostgreSQL. El script de gate
+para Hermes está en `integrations/hermes/scripts/gym-coach-workout-gate.sh`.
+
+La tarea recomendada se ejecuta cada cinco minutos con la skill `gym-coach`, entrega las revisiones al
+Topic `Revisiones` y mantiene los avisos operativos del gateway en `Alertas`; no invoca al modelo cuando no hay cambios. El gateway debe estar activo y
+el usuario debe haber iniciado una conversación con el bot. Esta automatización sigue siendo de solo
+lectura respecto a Hevy.

@@ -13,7 +13,9 @@ from gym_coach.coach.schemas import (
     CoachContext,
     CoachResponse,
     EvidenceFact,
+    ProposedExercise,
     ProposedSet,
+    ProposedWorkout,
 )
 from gym_coach.coach.service import CoachService
 
@@ -113,6 +115,38 @@ async def test_coach_maps_invalid_structured_output_to_safe_error() -> None:
 def test_proposed_set_rejects_inverted_repetition_range() -> None:
     with pytest.raises(ValidationError, match="reps_max"):
         ProposedSet(reps_min=12, reps_max=8)
+
+
+def test_superset_groups_require_two_contiguous_exercises() -> None:
+    base = {
+        "title": "Paired work",
+        "rest_seconds": 60,
+        "sets": [{"reps_min": 8, "reps_max": 12}],
+    }
+    workout = ProposedWorkout(
+        title="Upper",
+        exercises=[
+            ProposedExercise(**base, superset_group="push_pull"),
+            ProposedExercise(**base, superset_group="push_pull"),
+        ],
+    )
+    assert workout.exercises[0].superset_group == "push_pull"
+
+    with pytest.raises(ValidationError, match="at least two"):
+        ProposedWorkout(
+            title="Invalid",
+            exercises=[ProposedExercise(**base, superset_group="alone")],
+        )
+
+    with pytest.raises(ValidationError, match="contiguous"):
+        ProposedWorkout(
+            title="Invalid",
+            exercises=[
+                ProposedExercise(**base, superset_group="a"),
+                ProposedExercise(**base),
+                ProposedExercise(**base, superset_group="a"),
+            ],
+        )
 
 
 def test_coach_response_rejects_additional_fields() -> None:

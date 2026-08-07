@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: gym_coach
       POSTGRES_USER: gym_coach
@@ -16,7 +17,9 @@ services:
       retries: 10
 
   ollama:
+    profiles: ["llm"]
     image: ollama/ollama:0.32.3
+    restart: unless-stopped
     gpus: all
     environment:
       OLLAMA_CONTEXT_LENGTH: "16384"

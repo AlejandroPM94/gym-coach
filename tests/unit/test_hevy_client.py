@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -11,6 +12,13 @@ from gym_coach.integrations.hevy.errors import (
     HevyInvalidResponseError,
     HevyTimeoutError,
 )
+from gym_coach.integrations.hevy.schemas import (
+    RepRange,
+    RoutineWriteData,
+    RoutineWriteExercise,
+    RoutineWriteRequest,
+    RoutineWriteSet,
+)
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "hevy"
 USER = json.loads((FIXTURES / "user_info.json").read_text(encoding="utf-8"))
@@ -21,6 +29,46 @@ WORKOUT = {
     "end_time": "2026-08-01T11:00:00Z",
     "exercises": [],
 }
+ROUTINE = {
+    "id": "routine-created",
+    "title": "Upper A",
+    "folder_id": None,
+    "exercises": [
+        {
+            "index": 0,
+            "title": "Anonymous exercise",
+            "exercise_template_id": "template-1",
+            "rest_seconds": 120,
+            "sets": [
+                {
+                    "index": 0,
+                    "type": "normal",
+                    "rep_range": {"start": 8, "end": 12},
+                }
+            ],
+        }
+    ],
+}
+
+
+def routine_write_request() -> RoutineWriteRequest:
+    return RoutineWriteRequest(
+        routine=RoutineWriteData(
+            title="Upper A",
+            exercises=[
+                RoutineWriteExercise(
+                    exercise_template_id="template-1",
+                    rest_seconds=120,
+                    sets=[
+                        RoutineWriteSet(
+                            set_type="normal",
+                            rep_range=RepRange(start=8, end=12),
+                        )
+                    ],
+                )
+            ],
+        )
+    )
 
 
 @respx.mock
@@ -69,6 +117,67 @@ async def test_recent_workouts_paginates(hevy_client: HevyClient) -> None:
     assert [workout.id for workout in workouts] == ["workout-1", "workout-2"]
     assert route.call_count == 2
     assert dict(route.calls[0].request.url.params) == {"page": "1", "pageSize": "2"}
+
+
+@respx.mock
+async def test_workout_events_are_typed_and_paginated(hevy_client: HevyClient) -> None:
+    route = respx.get("https://hevy.test/v1/workouts/events")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json={
+                "page": 1,
+                "page_count": 2,
+                "workouts": [
+                    {
+                        "type": "updated",
+                        "workout": {
+                            **WORKOUT,
+                            "created_at": "2026-08-01T11:00:00Z",
+                        },
+                    }
+                ],
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "page": 2,
+                "page_count": 2,
+                "workouts": [
+                    {
+                        "type": "deleted",
+                        "id": "deleted-workout",
+                        "deleted_at": "2026-08-02T11:00:00Z",
+                    }
+                ],
+            },
+        ),
+    ]
+
+    events = await hevy_client.get_workout_events(since=datetime(2026, 8, 1, tzinfo=UTC))
+
+    assert [event.type for event in events] == ["updated", "deleted"]
+    assert route.call_count == 2
+    assert dict(route.calls[0].request.url.params) == {
+        "page": "1",
+        "pageSize": "10",
+        "since": "2026-08-01T00:00:00Z",
+    }
+
+
+@respx.mock
+async def test_workout_events_accept_empty_realistic_response(
+    hevy_client: HevyClient,
+) -> None:
+    payload = json.loads((FIXTURES / "workout_events_empty.json").read_text(encoding="utf-8"))
+    respx.get("https://hevy.test/v1/workouts/events").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+
+    events = await hevy_client.get_workout_events(since=datetime(2026, 8, 1, tzinfo=UTC))
+
+    assert events == []
 
 
 @respx.mock
@@ -141,6 +250,122 @@ async def test_retries_transient_http_errors(hevy_client: HevyClient) -> None:
 
     assert user.id == "anonymous-user-id"
     assert route.call_count == 3
+
+
+@respx.mock
+async def test_create_and_update_routine_follow_official_contract(
+    hevy_client: HevyClient,
+) -> None:
+    create = respx.post("https://hevy.test/v1/routines").mock(
+        return_value=httpx.Response(201, json={"routine": ROUTINE, "new_field": True})
+    )
+    update = respx.put("https://hevy.test/v1/routines/routine-created").mock(
+        return_value=httpx.Response(200, json={"routine": [ROUTINE]})
+    )
+    get = respx.get("https://hevy.test/v1/routines/routine-created").mock(
+        return_value=httpx.Response(200, json={"routine": ROUTINE})
+    )
+    respx.get("https://hevy.test/v1/routines").mock(
+        return_value=httpx.Response(200, json={"page": 1, "page_count": 1, "routines": []})
+    )
+
+    fetched = await hevy_client.get_routine("routine-created")
+    created = await hevy_client.create_routine(routine_write_request())
+    updated = await hevy_client.update_routine("routine-created", routine_write_request())
+
+    assert fetched.id == created.id == updated.id == "routine-created"
+    create_payload = json.loads(create.calls[0].request.content)
+    update_payload = json.loads(update.calls[0].request.content)
+    assert "folder_id" in create_payload["routine"]
+    assert create_payload["routine"]["folder_id"] is None
+    assert "folder_id" not in update_payload["routine"]
+    assert create_payload["routine"]["exercises"][0]["sets"][0] == {
+        "type": "normal",
+        "rep_range": {"start": 8, "end": 12},
+    }
+    assert update.call_count == 1
+    assert get.call_count == 1
+
+
+@respx.mock
+async def test_routine_response_rejects_ambiguous_lists(hevy_client: HevyClient) -> None:
+    respx.get("https://hevy.test/v1/routines/routine-created").mock(
+        return_value=httpx.Response(200, json={"routine": [ROUTINE, ROUTINE]})
+    )
+
+    with pytest.raises(HevyInvalidResponseError, match="expected schema"):
+        await hevy_client.get_routine("routine-created")
+
+
+@respx.mock
+async def test_write_timeout_is_not_retried(hevy_client: HevyClient) -> None:
+    respx.get("https://hevy.test/v1/routines").mock(
+        return_value=httpx.Response(200, json={"page": 1, "page_count": 1, "routines": []})
+    )
+    route = respx.post("https://hevy.test/v1/routines").mock(
+        side_effect=httpx.ReadTimeout("uncertain")
+    )
+
+    with pytest.raises(HevyTimeoutError, match="outcome is unknown"):
+        await hevy_client.create_routine(routine_write_request())
+
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_write_http_403_is_sanitized_and_keeps_status_code(
+    hevy_client: HevyClient,
+) -> None:
+    respx.get("https://hevy.test/v1/routines").mock(
+        return_value=httpx.Response(200, json={"page": 1, "page_count": 1, "routines": []})
+    )
+    respx.post("https://hevy.test/v1/routines").mock(
+        return_value=httpx.Response(403, text="private account detail")
+    )
+
+    with pytest.raises(HevyHTTPError) as raised:
+        await hevy_client.create_routine(routine_write_request())
+
+    assert raised.value.status_code == 403
+    assert "permissions, plan, or account limits" in str(raised.value)
+    assert "private account detail" not in str(raised.value)
+
+
+@respx.mock
+async def test_create_recovers_unique_matching_routine_after_invalid_201(
+    hevy_client: HevyClient,
+) -> None:
+    routines = respx.get("https://hevy.test/v1/routines")
+    routines.side_effect = [
+        httpx.Response(200, json={"page": 1, "page_count": 1, "routines": []}),
+        httpx.Response(
+            200,
+            json={"page": 1, "page_count": 1, "routines": [ROUTINE]},
+        ),
+    ]
+    respx.post("https://hevy.test/v1/routines").mock(
+        return_value=httpx.Response(201, json={"unexpected_success_shape": True})
+    )
+
+    created = await hevy_client.create_routine(routine_write_request())
+
+    assert created.id == "routine-created"
+    assert routines.call_count == 2
+
+
+@respx.mock
+async def test_create_keeps_uncertain_outcome_when_invalid_201_cannot_be_matched(
+    hevy_client: HevyClient,
+) -> None:
+    respx.get("https://hevy.test/v1/routines").mock(
+        return_value=httpx.Response(200, json={"page": 1, "page_count": 1, "routines": []})
+    )
+    respx.post("https://hevy.test/v1/routines").mock(
+        return_value=httpx.Response(201, json={"unexpected_success_shape": True})
+    )
+
+    with pytest.raises(HevyInvalidResponseError, match="write response"):
+        await hevy_client.create_routine(routine_write_request())
 
 
 def test_owned_client_does_not_expose_key() -> None:

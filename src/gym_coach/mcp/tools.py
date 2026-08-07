@@ -1,5 +1,5 @@
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib.metadata import PackageNotFoundError, version
@@ -9,27 +9,54 @@ from uuid import UUID
 from sqlalchemy.exc import SQLAlchemyError
 
 from gym_coach.config import Settings
-from gym_coach.integrations.hevy.errors import HevyError
-from gym_coach.integrations.hevy.schemas import UserInfo
+from gym_coach.integrations.hevy.client import routine_matches_write_request
+from gym_coach.integrations.hevy.errors import (
+    HevyError,
+    HevyHTTPError,
+    HevyInvalidResponseError,
+    HevyTimeoutError,
+    HevyTransportError,
+)
+from gym_coach.integrations.hevy.schemas import (
+    RepRange,
+    Routine,
+    RoutineWriteData,
+    RoutineWriteExercise,
+    RoutineWriteRequest,
+    RoutineWriteSet,
+    UserInfo,
+)
 from gym_coach.mcp.errors import BackendUnavailableError, ResourceNotFoundError
 from gym_coach.mcp.schemas import (
     AdherenceSummary,
+    AthleteCheckInInput,
+    AthleteCheckInView,
+    AthleteMeasurementInput,
+    AthleteMeasurementView,
     AthleteProfileUpdate,
     AthleteSummary,
+    CoachingAssessment,
     ComponentStatus,
     ExerciseProgressReport,
     ExerciseSessionSummary,
     ExerciseTemplateSearchResults,
     GoalMutationResult,
     HevyConnectionStatus,
+    HevySyncResult,
     OnboardingStatus,
     PlanDecisionResult,
     ProfileMutationResult,
     RecentWorkouts,
+    RoutineApplicationCommand,
+    RoutineApplicationPreview,
+    RoutineApplicationReconciliationContext,
+    RoutineApplicationReconciliationResult,
+    RoutineApplicationResult,
     RoutineList,
     StagnationSummary,
     SystemStatus,
     TrainingGoalUpdate,
+    TrainingHistoryAssessment,
     TrainingMetrics,
     TrainingPlanComparison,
     TrainingPlanProposal,
@@ -37,9 +64,12 @@ from gym_coach.mcp.schemas import (
     TrainingRoutine,
     TrainingWorkout,
     VerifiedPlanEvidence,
+    WorkoutReviewAcknowledgement,
 )
 from gym_coach.metrics.service import ExerciseReport, MetricsError
 from gym_coach.metrics.types import MetricsSummary, StagnationResult
+from gym_coach.sync.hevy import HevySyncError, routine_content_hash
+from gym_coach.sync.types import SyncResult as HevySyncRun
 
 MAX_RECENT_WORKOUTS = 50
 MAX_EXERCISE_RESULTS = 25
@@ -51,6 +81,7 @@ _EXERCISE_EVIDENCE = re.compile(
 _ROUTINE_EVIDENCE = re.compile(r"routine:(?P<routine_id>[a-z0-9_.-]+)")
 _PROFILE_EVIDENCE = re.compile(r"profile:(?P<version>\d+)")
 _GOAL_EVIDENCE = re.compile(r"goal:(?P<version>\d+)")
+_HISTORY_EVIDENCE = re.compile(rf"history:assessment:{_DATE_PATTERN}")
 
 
 class HevyStatusClient(Protocol):
@@ -60,8 +91,23 @@ class HevyStatusClient(Protocol):
 
     async def get_user(self) -> UserInfo: ...
 
+    async def get_routine(self, routine_id: str) -> Routine: ...
+
+    async def get_all_routines(self) -> list[Routine]: ...
+
+    async def create_routine(self, request: RoutineWriteRequest) -> Routine: ...
+
+    async def update_routine(self, routine_id: str, request: RoutineWriteRequest) -> Routine: ...
+
 
 HevyClientFactory = Callable[[], HevyStatusClient]
+
+
+class HevySyncRunner(Protocol):
+    async def sync(self) -> HevySyncRun: ...
+
+
+HevySyncFactory = Callable[[], HevySyncRunner]
 
 
 class MCPReadRepository(Protocol):
@@ -71,7 +117,17 @@ class MCPReadRepository(Protocol):
 
     async def onboarding_status(self) -> OnboardingStatus: ...
 
+    async def training_history_assessment(self) -> TrainingHistoryAssessment: ...
+
+    async def coaching_assessment(self) -> CoachingAssessment: ...
+
     async def save_profile(self, data: AthleteProfileUpdate) -> ProfileMutationResult: ...
+
+    async def save_measurement(
+        self, data: AthleteMeasurementInput
+    ) -> AthleteMeasurementView | None: ...
+
+    async def save_check_in(self, data: AthleteCheckInInput) -> AthleteCheckInView | None: ...
 
     async def add_goal(self, data: TrainingGoalUpdate) -> GoalMutationResult | None: ...
 
@@ -105,6 +161,40 @@ class MCPReadRepository(Protocol):
         self, proposal_id: UUID, decision: Literal["approved", "rejected"]
     ) -> PlanDecisionResult | None: ...
 
+    async def acknowledge_workout_review(
+        self, review_id: UUID
+    ) -> WorkoutReviewAcknowledgement | None: ...
+
+    async def prepare_routine_application(
+        self, proposal_id: UUID
+    ) -> RoutineApplicationPreview | None: ...
+
+    async def claim_routine_application(
+        self, proposal_id: UUID, confirmation_token: str
+    ) -> RoutineApplicationCommand | None: ...
+
+    async def finish_routine_application(
+        self,
+        application_id: UUID,
+        *,
+        status: Literal["applied", "failed", "uncertain", "partial"],
+        routine_ids: list[str],
+        error_type: str | None,
+    ) -> None: ...
+
+    async def get_routine_application_reconciliation_context(
+        self, proposal_id: UUID
+    ) -> RoutineApplicationReconciliationContext | None: ...
+
+    async def reconcile_routine_application(
+        self,
+        application_id: UUID,
+        *,
+        status: Literal["applied", "partial", "uncertain"],
+        routine_ids: list[str],
+        error_type: str | None,
+    ) -> None: ...
+
 
 class MCPMetricsReader(Protocol):
     async def summary(
@@ -131,11 +221,13 @@ class MCPTools:
         repository: MCPReadRepository,
         metrics: MCPMetricsReader,
         hevy_client_factory: HevyClientFactory,
+        hevy_sync_factory: HevySyncFactory | None = None,
     ) -> None:
         self._settings = settings
         self._repository = repository
         self._metrics = metrics
         self._hevy_client_factory = hevy_client_factory
+        self._hevy_sync_factory = hevy_sync_factory
 
     async def get_system_status(self) -> SystemStatus:
         postgres = await self._postgres_status()
@@ -182,17 +274,59 @@ class MCPTools:
             detail="Hevy is configured and accessible",
         )
 
+    async def sync_hevy(self, *, user_confirmed: bool) -> HevySyncResult:
+        _require_confirmation(user_confirmed)
+        if self._hevy_sync_factory is None:
+            raise ValueError("Hevy synchronization is not configured")
+        try:
+            result = await self._hevy_sync_factory().sync()
+        except (HevyError, HevySyncError) as exc:
+            raise ValueError(
+                "Hevy synchronization failed safely; no routine write was attempted"
+            ) from exc
+        return HevySyncResult(
+            run_id=result.run_id,
+            inserted=result.counts.inserted,
+            updated=result.counts.updated,
+            unchanged=result.counts.unchanged,
+            deleted=result.counts.deleted,
+        )
+
     async def get_athlete_summary(self) -> AthleteSummary:
         return await self._database_call(self._repository.athlete_summary)
 
     async def get_onboarding_status(self) -> OnboardingStatus:
         return await self._database_call(self._repository.onboarding_status)
 
+    async def get_training_history_assessment(self) -> TrainingHistoryAssessment:
+        return await self._database_call(self._repository.training_history_assessment)
+
+    async def get_coaching_assessment(self) -> CoachingAssessment:
+        return await self._database_call(self._repository.coaching_assessment)
+
     async def save_confirmed_athlete_profile(
         self, profile: AthleteProfileUpdate, *, user_confirmed: bool
     ) -> ProfileMutationResult:
         _require_confirmation(user_confirmed)
         return await self._database_call(lambda: self._repository.save_profile(profile))
+
+    async def save_confirmed_athlete_measurement(
+        self, measurement: AthleteMeasurementInput, *, user_confirmed: bool
+    ) -> AthleteMeasurementView:
+        _require_confirmation(user_confirmed)
+        result = await self._database_call(lambda: self._repository.save_measurement(measurement))
+        if result is None:
+            raise ResourceNotFoundError("Athlete profile must be configured before measurements")
+        return result
+
+    async def save_confirmed_athlete_check_in(
+        self, check_in: AthleteCheckInInput, *, user_confirmed: bool
+    ) -> AthleteCheckInView:
+        _require_confirmation(user_confirmed)
+        result = await self._database_call(lambda: self._repository.save_check_in(check_in))
+        if result is None:
+            raise ResourceNotFoundError("Athlete profile must be configured before check-ins")
+        return result
 
     async def add_confirmed_training_goal(
         self, goal: TrainingGoalUpdate, *, user_confirmed: bool
@@ -353,6 +487,25 @@ class MCPTools:
         athlete: AthleteSummary | None = None
         resolved: list[VerifiedPlanEvidence] = []
         for evidence_id in dict.fromkeys(evidence_ids):
+            if _HISTORY_EVIDENCE.fullmatch(evidence_id):
+                history = await self.get_training_history_assessment()
+                if history.evidence_id != evidence_id:
+                    raise ValueError("history evidence is stale; request a fresh assessment")
+                resolved.append(
+                    VerifiedPlanEvidence(
+                        evidence_id=evidence_id,
+                        category="history",
+                        description="Deterministic training-history assessment",
+                        value=(
+                            f"level={history.history_level}; confidence={history.confidence}; "
+                            f"workouts={history.workout_count}; days={history.calendar_days}; "
+                            f"distinct_exercises={history.distinct_exercise_count}"
+                        ),
+                        period_start=history.period_start,
+                        period_end=history.period_end,
+                    )
+                )
+                continue
             if match := _SUMMARY_EVIDENCE.fullmatch(evidence_id):
                 summary_metric = await self.get_training_metrics(int(match.group("days")))
                 if summary_metric.evidence_id != evidence_id:
@@ -475,6 +628,201 @@ class MCPTools:
             raise ResourceNotFoundError("Training plan proposal was not found")
         return result
 
+    async def preview_training_plan_application(
+        self, proposal_id: UUID
+    ) -> RoutineApplicationPreview:
+        result = await self._database_call(
+            lambda: self._repository.prepare_routine_application(proposal_id)
+        )
+        if result is None:
+            raise ResourceNotFoundError("Training plan proposal was not found")
+        return result
+
+    async def apply_training_plan_to_hevy(
+        self,
+        proposal_id: UUID,
+        confirmation_token: str,
+        *,
+        user_confirmed: bool,
+    ) -> RoutineApplicationResult:
+        _require_confirmation(user_confirmed)
+        if (
+            self._settings.hevy_api_key is None
+            or not self._settings.hevy_api_key.get_secret_value()
+        ):
+            raise ValueError("HEVY_API_KEY must be configured before applying a routine")
+        command = await self._database_call(
+            lambda: self._repository.claim_routine_application(
+                proposal_id, confirmation_token.strip()
+            )
+        )
+        if command is None:
+            raise ResourceNotFoundError("Prepared routine application was not found")
+        routine_ids: list[str] = []
+        status: Literal["applied", "failed", "uncertain", "partial"] = "applied"
+        error_type: str | None = None
+        sync_status: Literal["not_configured", "not_run", "succeeded", "failed"] = (
+            "not_configured" if self._hevy_sync_factory is None else "not_run"
+        )
+        try:
+            async with self._hevy_client_factory() as client:
+                if command.action == "update":
+                    if command.source_routine_id is None or command.source_routine_hash is None:
+                        raise ValueError("Prepared update has no source routine")
+                    current = await client.get_routine(command.source_routine_id)
+                    if routine_content_hash(current) != command.source_routine_hash:
+                        status = "failed"
+                        error_type = "stale_routine"
+                    else:
+                        routine = await client.update_routine(
+                            command.source_routine_id,
+                            _routine_request(command.plan.workouts[0]),
+                        )
+                        routine_ids.append(routine.id)
+                else:
+                    for workout in command.plan.workouts:
+                        routine = await client.create_routine(_routine_request(workout))
+                        routine_ids.append(routine.id)
+        except (HevyTimeoutError, HevyTransportError) as exc:
+            status = "partial" if routine_ids else "uncertain"
+            error_type = _hevy_application_error_code(exc)
+        except HevyInvalidResponseError as exc:
+            # A successful HTTP write followed by an invalid response can still have
+            # changed Hevy. Never classify it as safely retryable.
+            status = "partial" if routine_ids else "uncertain"
+            error_type = _hevy_application_error_code(exc)
+        except HevyHTTPError as exc:
+            status = "partial" if routine_ids else "failed"
+            error_type = _hevy_application_error_code(exc)
+        except HevyError as exc:
+            status = "partial" if routine_ids else "failed"
+            error_type = _hevy_application_error_code(exc)
+        if status in {"applied", "partial"} and routine_ids and self._hevy_sync_factory is not None:
+            try:
+                await self._hevy_sync_factory().sync()
+                sync_status = "succeeded"
+            except (HevyError, HevySyncError, SQLAlchemyError):
+                # The remote write remains classified from its own response. A failed
+                # post-write sync is observable without turning a confirmed Hevy write
+                # into a retryable application failure.
+                sync_status = "failed"
+        await self._database_call(
+            lambda: self._repository.finish_routine_application(
+                command.application_id,
+                status=status,
+                routine_ids=routine_ids,
+                error_type=error_type,
+            )
+        )
+        return RoutineApplicationResult(
+            application_id=command.application_id,
+            proposal_id=proposal_id,
+            action=command.action,
+            status=status,
+            routine_ids=routine_ids,
+            error_code=error_type,
+            sync_status=sync_status,
+            message=_routine_application_message(status, error_type, sync_status),
+        )
+
+    async def reconcile_training_plan_application(
+        self, proposal_id: UUID, *, user_confirmed: bool
+    ) -> RoutineApplicationReconciliationResult:
+        _require_confirmation(user_confirmed)
+        context = await self._database_call(
+            lambda: self._repository.get_routine_application_reconciliation_context(proposal_id)
+        )
+        if context is None:
+            raise ResourceNotFoundError("Routine application was not found")
+        if context.action == "update":
+            if context.plan.source_routine_id is None or len(context.plan.workouts) != 1:
+                raise ValueError("Prepared update has no single source routine")
+            async with self._hevy_client_factory() as client:
+                routine = await client.get_routine(context.plan.source_routine_id)
+            if routine_matches_write_request(routine, _routine_request(context.plan.workouts[0])):
+                matched_indexes = [0]
+                matched_ids = [routine.id]
+            else:
+                matched_indexes = []
+                matched_ids = []
+        else:
+            async with self._hevy_client_factory() as client:
+                routines = await client.get_all_routines()
+            cutoff = context.applied_at - timedelta(minutes=5)
+            recent = [
+                routine
+                for routine in routines
+                if routine.created_at is not None and routine.created_at >= cutoff
+            ]
+            recorded_count = min(len(context.recorded_routine_ids), len(context.plan.workouts))
+            matched_indexes = list(range(recorded_count))
+            matched_ids = list(context.recorded_routine_ids)
+            used_ids = set(matched_ids)
+            for index, workout in enumerate(context.plan.workouts[recorded_count:], recorded_count):
+                matches = [
+                    routine
+                    for routine in recent
+                    if routine.id not in used_ids
+                    and routine_matches_write_request(routine, _routine_request(workout))
+                ]
+                if len(matches) == 1:
+                    matched_indexes.append(index)
+                    matched_ids.append(matches[0].id)
+                    used_ids.add(matches[0].id)
+
+        matched_ids = list(dict.fromkeys(matched_ids))
+        if len(matched_indexes) == len(context.plan.workouts):
+            status: Literal["applied", "partial", "uncertain"] = "applied"
+            error_code = None
+        elif matched_ids:
+            status = "partial"
+            error_code = "reconciled_partial"
+        else:
+            status = "uncertain"
+            error_code = "hevy_invalid_response"
+        await self._database_call(
+            lambda: self._repository.reconcile_routine_application(
+                context.application_id,
+                status=status,
+                routine_ids=matched_ids,
+                error_type=error_code,
+            )
+        )
+        sync_status: Literal["not_configured", "not_run", "succeeded", "failed"] = (
+            "not_configured" if self._hevy_sync_factory is None else "not_run"
+        )
+        if matched_ids and self._hevy_sync_factory is not None:
+            try:
+                await self._hevy_sync_factory().sync()
+                sync_status = "succeeded"
+            except (HevyError, HevySyncError, SQLAlchemyError):
+                sync_status = "failed"
+        return RoutineApplicationReconciliationResult(
+            application_id=context.application_id,
+            proposal_id=proposal_id,
+            status=status,
+            matched_workout_indexes=matched_indexes,
+            routine_ids=matched_ids,
+            error_code=error_code,
+            sync_status=sync_status,
+            message=(
+                "Remote Hevy routines were compared with the exact approved plan. "
+                "Create a new proposal containing only unmatched workout indexes."
+                if status == "partial"
+                else "Remote Hevy routines were compared with the exact approved plan."
+            ),
+        )
+
+    async def acknowledge_automatic_workout_review(
+        self, review_id: UUID
+    ) -> WorkoutReviewAcknowledgement:
+        result = await self._database_call(
+            lambda: self._repository.acknowledge_workout_review(review_id)
+        )
+        if result is None:
+            raise ResourceNotFoundError("Workout review is not pending acknowledgement")
+        return result
+
     async def _postgres_status(self) -> ComponentStatus:
         try:
             await self._repository.is_available()
@@ -503,11 +851,115 @@ def _validated_identifier(value: str, field_name: str) -> str:
     return normalized
 
 
+def _routine_request(workout: object) -> RoutineWriteRequest:
+    from gym_coach.mcp.schemas import ProposedPlanWorkout
+
+    planned = ProposedPlanWorkout.model_validate(workout)
+    superset_ids: dict[str, int] = {}
+    return RoutineWriteRequest(
+        routine=RoutineWriteData(
+            title=planned.title,
+            exercises=[
+                RoutineWriteExercise(
+                    exercise_template_id=exercise.exercise_template_external_id or "",
+                    rest_seconds=exercise.rest_seconds,
+                    notes=_exercise_notes(exercise.notes, exercise.sets),
+                    superset_id=(
+                        superset_ids.setdefault(exercise.superset_group, len(superset_ids) + 1)
+                        if exercise.superset_group is not None
+                        else None
+                    ),
+                    sets=[_routine_set(item) for item in exercise.sets],
+                )
+                for exercise in planned.exercises
+            ],
+        )
+    )
+
+
+def _routine_set(item: object) -> RoutineWriteSet:
+    from gym_coach.mcp.schemas import ProposedPlanSet
+
+    planned = ProposedPlanSet.model_validate(item)
+    set_type = "dropset" if planned.set_type == "drop" else planned.set_type
+    return RoutineWriteSet(
+        set_type=set_type,
+        reps=None,
+        rep_range=(
+            RepRange(start=planned.reps_min, end=planned.reps_max)
+            if planned.reps_min is not None and planned.reps_max is not None
+            else None
+        ),
+        duration_seconds=planned.duration_seconds_min,
+        distance_meters=(
+            int(planned.distance_meters_min) if planned.distance_meters_min is not None else None
+        ),
+    )
+
+
+def _exercise_notes(base_notes: str | None, sets: Sequence[object]) -> str | None:
+    from gym_coach.mcp.schemas import ProposedPlanSet
+
+    guidance = list(
+        dict.fromkeys(
+            item.load_guidance
+            for item in (ProposedPlanSet.model_validate(value) for value in sets)
+            if item.load_guidance
+        )
+    )
+    parts = [part for part in (base_notes, *guidance) if part]
+    return " | ".join(parts) if parts else None
+
+
 def _require_confirmation(user_confirmed: bool) -> None:
     if user_confirmed is not True:
         raise ValueError(
             "Explicit athlete confirmation is required after showing a structured summary"
         )
+
+
+def _hevy_application_error_code(exc: HevyError) -> str:
+    if isinstance(exc, HevyHTTPError):
+        return f"hevy_http_{exc.status_code}"
+    if isinstance(exc, HevyInvalidResponseError):
+        return "hevy_invalid_response"
+    if isinstance(exc, HevyTimeoutError):
+        return "hevy_timeout"
+    if isinstance(exc, HevyTransportError):
+        return "hevy_transport"
+    return "hevy_error"
+
+
+def _routine_application_message(
+    status: Literal["applied", "failed", "uncertain", "partial"],
+    error_code: str | None,
+    sync_status: Literal["not_configured", "not_run", "succeeded", "failed"] = "not_run",
+) -> str:
+    sync_note = ""
+    if sync_status == "succeeded":
+        sync_note = " PostgreSQL was synchronized with the current Hevy snapshot."
+    elif sync_status == "failed":
+        sync_note = (
+            " The Hevy write result is preserved, but PostgreSQL synchronization failed; "
+            "the next sync will retry it."
+        )
+    if status == "applied":
+        return "The exact approved plan was applied to Hevy." + sync_note
+    diagnostic = f" Safe diagnostic: {error_code}." if error_code is not None else ""
+    if status == "failed":
+        return (
+            "Hevy rejected the exact write before any routine was confirmed."
+            f"{diagnostic} Correct the cause and prepare a new preview before retrying.{sync_note}"
+        )
+    if status == "partial":
+        return (
+            "Only part of the approved plan was confirmed in Hevy."
+            f"{diagnostic} Reconcile the remote routines and do not retry automatically.{sync_note}"
+        )
+    return (
+        "The remote outcome could not be confirmed."
+        f"{diagnostic} Reconcile Hevy and do not retry automatically.{sync_note}"
+    )
 
 
 def _decimal_string(value: Decimal | None) -> str | None:

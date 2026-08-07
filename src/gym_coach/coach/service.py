@@ -158,7 +158,7 @@ class CoachService:
                 id="profile.experience",
                 category="profile",
                 description="Nivel de experiencia declarado",
-                value=profile.experience_level,
+                value=profile.experience_level or "not_self_reported",
             ),
             EvidenceFact(
                 id="metric.workouts.28d",

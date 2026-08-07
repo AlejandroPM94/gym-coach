@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -190,6 +191,30 @@ class WorkoutSet(Base):
     custom_metric: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
 
 
+class AutomationCursor(Base):
+    __tablename__ = "automation_cursors"
+
+    stream: Mapped[str] = mapped_column(String(64), primary_key=True)
+    cursor_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WorkoutReview(Base):
+    __tablename__ = "workout_reviews"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    workout_external_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class AthleteProfile(Base):
     __tablename__ = "athlete_profiles"
 
@@ -197,7 +222,10 @@ class AthleteProfile(Base):
     profile_key: Mapped[str] = mapped_column(
         String(64), nullable=False, unique=True, default="default"
     )
-    experience_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    experience_level: Mapped[str | None] = mapped_column(String(32))
+    birth_year: Mapped[int | None] = mapped_column(Integer)
+    sex_for_energy_equation: Mapped[str | None] = mapped_column(String(16))
+    height_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     training_days_per_week: Mapped[int] = mapped_column(Integer, nullable=False)
     session_duration_minutes: Mapped[int | None] = mapped_column(Integer)
     equipment: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
@@ -205,6 +233,23 @@ class AthleteProfile(Base):
     preferences: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     limitations_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     preferences_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    occupation_activity: Mapped[str | None] = mapped_column(String(32))
+    average_daily_steps: Mapped[int | None] = mapped_column(Integer)
+    sleep_hours: Mapped[float | None] = mapped_column(Float)
+    sleep_quality: Mapped[int | None] = mapped_column(Integer)
+    stress_level: Mapped[int | None] = mapped_column(Integer)
+    dietary_pattern: Mapped[str | None] = mapped_column(String(64))
+    dietary_restrictions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    food_allergies: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    nutrition_preferences: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    nutrition_tracking_preference: Mapped[str | None] = mapped_column(String(32))
+    health_conditions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    medications_affecting_training: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    lifestyle_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    nutrition_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    health_reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -277,3 +322,70 @@ class CoachProposal(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decision_source: Mapped[str | None] = mapped_column(String(32))
     decision_user_confirmed: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class AthleteMeasurement(Base):
+    __tablename__ = "athlete_measurements"
+    __table_args__ = (UniqueConstraint("profile_id", "measured_on"),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    profile_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("athlete_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    measured_on: Mapped[date] = mapped_column(Date, nullable=False)
+    weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    waist_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    body_fat_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    body_fat_method: Mapped[str | None] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    user_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AthleteCheckIn(Base):
+    __tablename__ = "athlete_check_ins"
+    __table_args__ = (UniqueConstraint("profile_id", "checked_on"),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    profile_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("athlete_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    checked_on: Mapped[date] = mapped_column(Date, nullable=False)
+    sleep_quality: Mapped[int | None] = mapped_column(Integer)
+    stress_level: Mapped[int | None] = mapped_column(Integer)
+    energy_level: Mapped[int | None] = mapped_column(Integer)
+    hunger_level: Mapped[int | None] = mapped_column(Integer)
+    soreness_level: Mapped[int | None] = mapped_column(Integer)
+    training_adherence: Mapped[int | None] = mapped_column(Integer)
+    nutrition_adherence: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    user_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class RoutineApplication(Base):
+    __tablename__ = "routine_applications"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    proposal_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("coach_proposals.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="prepared")
+    proposal_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    confirmation_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_routine_hash: Mapped[str | None] = mapped_column(String(64))
+    result_routine_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    error_type: Mapped[str | None] = mapped_column(String(128))
+    prepared_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
