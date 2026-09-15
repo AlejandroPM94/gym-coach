@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -37,6 +37,13 @@ class AthleteProfileInput(StrictModel):
     lifestyle_reviewed: bool = False
     nutrition_reviewed: bool = False
     health_reviewed: bool = False
+
+    @field_validator("birth_year")
+    @classmethod
+    def birth_year_not_future(cls, value: int | None) -> int | None:
+        if value is not None and value > date.today().year:
+            raise ValueError("Birth year cannot be in the future")
+        return value
 
 
 class AthleteProfileView(AthleteProfileInput):
@@ -111,6 +118,7 @@ class CoachFinding(StrictModel):
 
 class ProposedSet(StrictModel):
     set_type: Literal["warmup", "normal", "drop", "failure"] = "normal"
+    weight_kg: Annotated[Decimal | None, Field(ge=0, le=500)] = None
     reps_min: Annotated[int | None, Field(ge=1, le=100)] = None
     reps_max: Annotated[int | None, Field(ge=1, le=100)] = None
     duration_seconds_min: Annotated[int | None, Field(ge=1, le=7200)] = None

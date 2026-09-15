@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ProfileItem = Annotated[str, Field(min_length=1, max_length=500)]
 EvidenceId = Annotated[
@@ -122,6 +122,13 @@ class AthleteProfileUpdate(MCPPublicModel):
     nutrition_reviewed: Literal[True]
     health_reviewed: Literal[True]
 
+    @field_validator("birth_year")
+    @classmethod
+    def birth_year_not_future(cls, value: int | None) -> int | None:
+        if value is not None and value > date.today().year:
+            raise ValueError("Birth year cannot be in the future")
+        return value
+
 
 class AthleteMeasurementInput(MCPPublicModel):
     measured_on: date
@@ -191,6 +198,8 @@ class CoachingAssessment(MCPPublicModel):
     missing_or_unreviewed: list[str]
     priority_questions: list[str]
     latest_weight_kg: str | None = None
+    latest_weight_measured_on: date | None = None
+    latest_weight_source: Literal["confirmed_manual", "health_connect_openscale"] | None = None
     bmi: str | None = None
     resting_energy_kcal: int | None = None
     protein_range_g_per_day: tuple[int, int] | None = None
@@ -380,6 +389,13 @@ class ExerciseSessionSummary(MCPPublicModel):
     volume_kg_reps: str
     best_e1rm_kg: str | None = None
     qualifying_sets: int = Field(ge=0)
+    working_sets: int = Field(ge=0)
+    best_weight_kg: str | None = None
+    minimum_weight_kg: str | None = None
+    max_reps: int | None = Field(default=None, ge=0)
+    total_distance_meters: str
+    total_duration_seconds: int = Field(ge=0)
+    mean_rpe: str | None = None
 
 
 class ExerciseProgressReport(MCPPublicModel):
@@ -391,12 +407,19 @@ class ExerciseProgressReport(MCPPublicModel):
     previous_e1rm_kg: str | None = None
     e1rm_change_kg: str | None = None
     e1rm_change_percent: str | None = None
+    progress_metric: str
+    latest_metric_value: str | None = None
+    previous_metric_value: str | None = None
+    best_metric_value: str | None = None
+    metric_change_percent: str | None = None
+    latest_is_personal_record: bool
     stagnation: StagnationSummary
     sessions: list[ExerciseSessionSummary]
 
 
 class ProposedPlanSet(MCPPublicModel):
     set_type: Literal["warmup", "normal", "drop", "failure"] = "normal"
+    weight_kg: Decimal | None = Field(default=None, ge=0, le=500)
     reps_min: int | None = Field(default=None, ge=1, le=100)
     reps_max: int | None = Field(default=None, ge=1, le=100)
     duration_seconds_min: int | None = Field(default=None, ge=1, le=7200)
@@ -533,6 +556,11 @@ class MuscleGroupPlanChange(MCPPublicModel):
     current_sets: int = Field(ge=0)
     proposed_sets: int = Field(ge=0)
     set_delta: int
+    current_indirect_sets: Decimal = Decimal(0)
+    proposed_indirect_sets: Decimal = Decimal(0)
+    current_total_stimulus_sets: Decimal = Decimal(0)
+    proposed_total_stimulus_sets: Decimal = Decimal(0)
+    total_stimulus_delta: Decimal = Decimal(0)
 
 
 class TrainingPlanComparison(MCPPublicModel):

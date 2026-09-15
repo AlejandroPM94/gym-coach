@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Google Drive hourly for a new Health Connect export
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=5min
+Unit=gym-coach-health-drive.service
+
+[Install]
+WantedBy=timers.target

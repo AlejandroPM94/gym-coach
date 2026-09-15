@@ -27,12 +27,18 @@ def _set(
     reps: int | None,
     *,
     set_type: str | None = "normal",
+    distance_meters: str | None = None,
+    duration_seconds: int | None = None,
+    rpe: float | None = None,
 ) -> SetSample:
     return SetSample(
         position=0,
         set_type=set_type,
         weight_kg=Decimal(weight) if weight is not None else None,
         reps=reps,
+        distance_meters=Decimal(distance_meters) if distance_meters is not None else None,
+        duration_seconds=duration_seconds,
+        rpe=rpe,
     )
 
 
@@ -91,6 +97,91 @@ def test_session_metric_separates_reps_volume_and_e1rm() -> None:
     assert metric.volume_kg_reps == Decimal("1075.00")
     assert metric.best_e1rm_kg == Decimal("64.17")
     assert metric.qualifying_sets == 3
+
+
+def test_session_metric_preserves_effort_distance_and_duration() -> None:
+    performance = ExercisePerformance(
+        workout_external_id="workout-1",
+        exercise_template_external_id="template-1",
+        exercise_type="distance_duration",
+        performed_at=NOW,
+        sets=(
+            _set(None, None, distance_meters="500", duration_seconds=120, rpe=7),
+            _set(None, None, distance_meters="750", duration_seconds=180, rpe=8),
+        ),
+    )
+    metric = calculate_session_metric(performance)
+    assert metric.working_sets == 2
+    assert metric.total_distance_meters == Decimal("1250.00")
+    assert metric.total_duration_seconds == 300
+    assert metric.mean_rpe == Decimal("7.50")
+
+
+def test_progress_uses_the_exercise_modality_and_needs_history_for_a_record() -> None:
+    repetitions = tuple(
+        ExercisePerformance(
+            f"workout-{index}",
+            "repetitions",
+            "reps_only",
+            NOW - timedelta(days=days),
+            (_set(None, reps),),
+        )
+        for index, (days, reps) in enumerate(((14, 10), (7, 12), (0, 15)))
+    )
+    progress = calculate_exercise_progress("repetitions", repetitions)
+    assert progress.progress_metric == "repetitions"
+    assert progress.latest_metric_value == 15
+    assert progress.metric_change_percent == Decimal("25.00")
+    assert progress.latest_is_personal_record is True
+
+    first = calculate_exercise_progress("repetitions", repetitions[:1])
+    assert first.latest_is_personal_record is False
+
+    missing_latest = (
+        *repetitions,
+        ExercisePerformance(
+            "workout-missing",
+            "repetitions",
+            "reps_only",
+            NOW + timedelta(days=1),
+            (_set(None, None),),
+        ),
+    )
+    assert (
+        calculate_exercise_progress("repetitions", missing_latest).latest_is_personal_record
+        is False
+    )
+
+
+def test_assisted_bodyweight_treats_less_assistance_as_progress() -> None:
+    performances = tuple(
+        _performance("assisted", days, weight, 8, exercise_type="bodyweight_assisted")
+        for days, weight in ((28, "30"), (21, "28"), (14, "26"), (7, "24"), (0, "20"))
+    )
+    progress = calculate_exercise_progress("assisted", performances)
+    stalled = detect_stagnation(
+        "assisted", progress.sessions, progress_metric=progress.progress_metric
+    )
+    assert progress.progress_metric == "assistance_kg"
+    assert progress.best_metric_value == 20
+    assert progress.latest_is_personal_record is True
+    assert stalled.is_stalled is False
+    assert stalled.improvement_percent == Decimal("33.33")
+
+
+def test_duration_stagnation_is_not_inferred_without_a_pace_or_load_context() -> None:
+    performance = ExercisePerformance(
+        "workout",
+        "duration",
+        "duration",
+        NOW,
+        (_set(None, None, duration_seconds=60),),
+    )
+    progress = calculate_exercise_progress("duration", (performance,))
+    result = detect_stagnation(
+        "duration", progress.sessions, progress_metric=progress.progress_metric
+    )
+    assert result.reason == "unsupported_progress_metric"
 
 
 def test_progress_never_mixes_exercise_templates() -> None:

@@ -79,7 +79,10 @@ class MetricsService:
         return ExerciseReport(
             progress=progress,
             stagnation=detect_stagnation(
-                exercise_template_external_id, progress.sessions, stagnation_rule
+                exercise_template_external_id,
+                progress.sessions,
+                stagnation_rule,
+                progress_metric=progress.progress_metric,
             ),
         )
 
@@ -107,7 +110,12 @@ class MetricsService:
             reports.append(
                 ExerciseReport(
                     progress=progress,
-                    stagnation=detect_stagnation(template_id, progress.sessions, stagnation_rule),
+                    stagnation=detect_stagnation(
+                        template_id,
+                        progress.sessions,
+                        stagnation_rule,
+                        progress_metric=progress.progress_metric,
+                    ),
                 )
             )
         return tuple(reports)

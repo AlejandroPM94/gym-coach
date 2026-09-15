@@ -15,6 +15,8 @@ from gym_coach.coach.management import CoachManagementService
 from gym_coach.coach.schemas import AthleteProfileInput, TrainingGoalInput
 from gym_coach.config import Settings, get_settings
 from gym_coach.db import create_engine, create_session_factory
+from gym_coach.integrations.google_drive.client import DriveClient, DriveError
+from gym_coach.integrations.health_connect.drive_sync import HealthDriveSyncService
 from gym_coach.integrations.hevy.client import HevyClient
 from gym_coach.integrations.hevy.errors import HevyConfigurationError, HevyError
 from gym_coach.integrations.hevy.raw_store import RawResponseStore
@@ -101,6 +103,30 @@ async def _poll_hevy_automation(settings: Settings, _: argparse.Namespace) -> st
             },
         }
     )
+
+
+async def _sync_health_drive(settings: Settings, _: argparse.Namespace) -> str:
+    credentials = settings.google_drive_service_account_file
+    folder_id = settings.google_drive_health_folder_id
+    if credentials is None or folder_id is None:
+        raise ValueError(
+            "Google Drive health sync is not configured; set its credential file and folder ID"
+        )
+    engine = create_engine(settings.database_url)
+    try:
+        async with DriveClient(
+            credentials,
+            folder_id,
+            filename=settings.google_drive_health_filename,
+        ) as drive:
+            result = await HealthDriveSyncService(
+                create_session_factory(engine),
+                drive,
+                timezone=settings.health_timezone,
+            ).sync()
+    finally:
+        await engine.dispose()
+    return result.model_dump_json()
 
 
 async def _metrics_summary(settings: Settings, args: argparse.Namespace) -> str:
@@ -258,6 +284,10 @@ def _parser() -> argparse.ArgumentParser:
         "poll-hevy", help="Poll workout events and gate an automatic review"
     )
     poll_hevy.set_defaults(handler=_poll_hevy_automation)
+    sync_health = automation_commands.add_parser(
+        "sync-health-drive", help="Import the latest scheduled Health Connect export from Drive"
+    )
+    sync_health.set_defaults(handler=_sync_health_drive)
     metrics = groups.add_parser("metrics", help="Deterministic sports metrics")
     metric_commands = metrics.add_subparsers(dest="command", required=True)
     summary = metric_commands.add_parser("summary")
@@ -314,7 +344,7 @@ def main() -> None:
     handler: Handler = args.handler
     try:
         message: str = asyncio.run(handler(get_settings(), args))
-    except (CoachError, HevyError, HevySyncError, MetricsError, ValueError) as exc:
+    except (CoachError, DriveError, HevyError, HevySyncError, MetricsError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
     print(message)

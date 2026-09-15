@@ -65,7 +65,7 @@ def calculate_bmi(weight_kg: Decimal, height_cm: Decimal) -> Decimal:
 def calculate_mifflin_st_jeor(
     *, weight_kg: Decimal, height_cm: Decimal, age: int, sex: str
 ) -> int | None:
-    if sex not in {"female", "male"}:
+    if sex not in {"female", "male"} or not 18 <= age <= 100:
         return None
     sex_constant = Decimal(5) if sex == "male" else Decimal(-161)
     result = Decimal(10) * weight_kg + Decimal("6.25") * height_cm - Decimal(5) * age

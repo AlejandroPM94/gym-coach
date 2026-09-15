@@ -38,6 +38,13 @@ class SessionMetric:
     volume_kg_reps: Decimal
     best_e1rm_kg: Decimal | None
     qualifying_sets: int
+    working_sets: int
+    best_weight_kg: Decimal | None
+    minimum_weight_kg: Decimal | None
+    max_reps: int | None
+    total_distance_meters: Decimal
+    total_duration_seconds: int
+    mean_rpe: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +55,12 @@ class ExerciseProgress:
     previous_e1rm_kg: Decimal | None
     e1rm_change_kg: Decimal | None
     e1rm_change_percent: Decimal | None
+    progress_metric: str = "e1rm_kg"
+    latest_metric_value: Decimal | None = None
+    previous_metric_value: Decimal | None = None
+    best_metric_value: Decimal | None = None
+    metric_change_percent: Decimal | None = None
+    latest_is_personal_record: bool = False
 
 
 @dataclass(frozen=True, slots=True)

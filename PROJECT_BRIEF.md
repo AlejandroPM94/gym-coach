@@ -27,10 +27,17 @@ interpretación separada y aprobación humana antes de modificar rutinas.
 9. **Coaching integral y aplicación Hevy (completada):** entrevista intensiva, nivel derivado del
    historial, mediciones/check-ins, reglas de entrenamiento/nutrición trazables y escritura de
    rutinas con doble confirmación.
-10. **Canales y datos adicionales:** Samsung Health/Health Connect y Telegram/app propia,
-   cada integración desacoplada y con consentimiento explícito.
+10. **Seguimiento integral (completada):** diario y objetivos nutricionales, Samsung Health mediante
+    Drive, composición openScale y revisión semanal con datos normalizados.
+11. **Optimización del entrenador (completada, en aceptación real):** prescripción histórica,
+    progresión por modalidad, recuperación contra línea base, estímulo muscular directo/indirecto e
+    informe post-entrenamiento estructurado. Quedan pruebas conversacionales, no lógica determinista.
 
 ## Decisiones iniciales
+
+Hito nutricional 2026-09-14: diario conversacional, catálogo personal con procedencia, recetas y
+cálculo determinista de kcal/macros. PostgreSQL conserva versiones inmutables e historial de
+correcciones. La documentación operativa está en `docs/NUTRITION.md`.
 
 - Layout `src/` y composición por fronteras para impedir acoplar FastAPI al contrato de Hevy.
 - Cliente HTTP async con HTTPX y dependencia inyectable para pruebas deterministas.

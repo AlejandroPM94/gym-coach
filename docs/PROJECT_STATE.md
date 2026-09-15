@@ -1,6 +1,63 @@
 # Estado del proyecto
 
-Actualizado: 2026-08-07
+Actualizado: 2026-09-15
+
+## Seguimiento conjunto y Samsung Health mediante Drive
+
+- Skill Hermes 0.9.0 y MCP con 41 herramientas: objetivos nutricionales calculados y versionados,
+  cierre de días, revisión semanal e informe post-entrenamiento estructurado.
+- Rutinas Hevy versionadas de forma inmutable. Cada sesión se enlaza solo a una prescripción cuya
+  vigencia pueda probarse por fecha; el resto declara fallback a la rutina actual.
+- Progreso determinista por modalidad: e1RM, carga externa, menor asistencia, repeticiones,
+  distancia o duración; RPE agregado y récords que requieren historial previo.
+- Recuperación frente a línea base personal de 21 días, excluyendo días parciales; señales de sueño,
+  pulso en reposo y HRV aportan contexto sin diagnosticar ni cambiar el plan automáticamente.
+- Comparación de planes con series directas y estímulo secundario heurístico de 0,5 por serie.
+- Catálogo nutricional buscable por barcode, raciones de etiqueta y objetivo de fibra parametrizado.
+- Último peso disponible independiente de mediciones de cintura; edad no forzada a 18 años.
+- Revisión con dieta, objetivos por fecha, entrenamiento, medidas manuales, pesajes openScale,
+  check-ins y actividad Samsung.
+- Migraciones `d83a1b50a201`, `e94b2c61b302`, `f47c3d92a105`, `ab914ec42f10` y
+  `c31e6c1124ab`: seguimiento auditado, salud normalizada y prescripciones versionadas.
+- Exportación diaria nativa de Health Connect hacia una carpeta privada de Google Drive; el backend
+  solo realiza conexiones salientes y PostgreSQL conserva los datos normalizados.
+- Importador de ZIP/SQLite con límites de tamaño, CRC, integridad y esquema v26. Filtra Samsung para
+  pasos, fases de sueño, ejercicio, distancia, energía, pulso, HRV, oxígeno y VO2 máx.; openScale
+  aporta peso y composición BIA. Procesa 30 días y separa ausente de cero.
+- Cliente Drive de solo lectura mediante cuenta de servicio y carpeta exacta; valida tamaño y MD5,
+  evita revisiones repetidas y no expone credenciales ni métricas en la salida operativa.
+- Cuenta de servicio sin roles de proyecto y carpeta dedicada compartida como lectora. La primera
+  descarga importó 29 días; la ampliación releyó la revisión actual una vez e importó 30 días.
+- CLI `gym-coach automation sync-health-drive` y timer systemd horario activos. La ejecución real
+  mediante systemd terminó con `Result=success` y dejó programada la siguiente comprobación.
+- El receptor LAN, certificados y APK propios se retiraron; no se abre ningún puerto en el equipo.
+- El ZIP real ampliado produjo 30 días: 27 con pasos, 24 con fases de sueño, 19 con ejercicio,
+  30 con pulso y 24 con oxígeno. La revisión se reimportó tras aplicar la migración; el ZIP aún
+  no contiene openScale, por lo que falta validar el primer registro matutino real.
+- Alembic está en `c31e6c1124ab`. La sincronización real posterior dejó 565 registros sin cambios,
+  capturó 8 versiones actuales y enlazará sesiones futuras; no atribuyó esas versiones a los 94
+  entrenamientos previos porque sus fechas no lo permiten.
+- Verificación final: 114 tests, incluidos PostgreSQL y MCP stdio; Ruff, Mypy, lock y diff limpios.
+  Hermes se reinició, descubre 41 herramientas y el informe conjunto respondió correctamente con
+  el entrenamiento real más reciente sin exponer sus datos.
+- Los crons activos usan ya los contratos nuevos: post-entrenamiento cada cinco minutos y revisión
+  semanal el lunes a las 09:00 sobre la semana cerrada. PostgreSQL quedó saludable y publicado solo
+  en `127.0.0.1:5432`; Ollama, si se activa, también queda limitado a loopback.
+- Activación y límites en `docs/HEALTH_CONNECT.md`; matriz conversacional pendiente en
+  `docs/COACHING_ACCEPTANCE.md`.
+
+## Hito nutricional
+
+- Catálogo personal de productos por 100 g/ml, recetas reutilizables, preview, diario fechado y
+  anulaciones auditadas; en aquel hito se alcanzaron 34 herramientas MCP.
+- Composiciones con procedencia confirmada, estimaciones explícitas y fibra desconocida nullable.
+- Totales Decimal calculados en Python; UUID idempotentes y composición histórica inmutable.
+- Migración `b62d8a04e391`, skill Hermes 0.7.0 y guía `docs/NUTRITION.md`.
+- Verificación: 91 tests pasan, incluidos PostgreSQL y MCP stdio; Ruff y Mypy limpios.
+  Migración aplicada a la base local, Alembic sin deriva y lock verificado.
+- En aquel hito, gateway y conexión Hermes→MCP se verificaron con 34 herramientas; la versión actual
+  aparece en la sección superior.
+- Pendiente validar etiqueta/comida real por Telegram. El backend no tiene OCR ni catálogo externo.
 
 ## Funcionalidades terminadas
 
@@ -29,10 +86,11 @@ Actualizado: 2026-08-07
 - Revisión explícita de limitaciones y preferencias: una lista vacía ya no se confunde con un campo
   que nunca se preguntó.
 - Planes con sesiones opcionales, ubicación, duración estimada y series prescritas por una única
-  dimensión: repeticiones, segundos o distancia.
+  dimensión: repeticiones, segundos o distancia; las series pueden incluir `weight_kg` cuando la
+  carga está respaldada por evidencia verificada.
 - Evidencias verificadas nuevamente al guardar cada propuesta y justificaciones por cambio.
-- Diff determinista de ejercicios retenidos/añadidos/eliminados, frecuencias, series y grupos
-  musculares primarios.
+- Diff determinista de ejercicios retenidos/añadidos/eliminados, frecuencias, series y estímulo
+  muscular directo e indirecto.
 - Hermes 0.20.0 instalado y configurado manualmente por el usuario; la conexión MCP, la skill y una
   consulta real de entrenamiento se verificaron de extremo a extremo.
 - PydanticAI movido a un extra experimental; la gestión de perfil, objetivos y decisiones no
@@ -139,9 +197,11 @@ Actualizado: 2026-08-07
 - Verificación del hito: 78 pruebas pasan con PostgreSQL y transporte MCP opt-in; validación de
   grupos y asignación de IDs Hevy cubiertas por pruebas unitarias. Falta probar una aplicación real
   con una superserie.
-- Verificación de la corrección Hevy: 83 pruebas pasan con PostgreSQL y transporte MCP opt-in;
+- Verificación de la corrección Hevy: 85 pruebas pasan con PostgreSQL y transporte MCP opt-in;
   Ruff, Mypy, lock y `git diff --check` están limpios. `hevy check` y `hevy user` reales terminaron
   con código 0 usando el `.env` local sin mostrar sus respuestas.
+- Verificación de cargas prescritas: 85 pruebas pasan con PostgreSQL y transporte MCP opt-in; una
+  carga `weight_kg` se conserva desde la propuesta pública hasta el payload de escritura de Hevy.
 
 ## Problemas conocidos
 
@@ -156,10 +216,10 @@ Actualizado: 2026-08-07
 - Los JSON raw contienen datos personales y no son fuente de verdad ni backup.
 - MCP calcula adherencia contra los días semanales del perfil confirmado; la API y CLI todavía
   permiten un objetivo de consulta independiente.
-- e1RM y volumen excluyen por diseño peso corporal, asistencia, distancia y duración hasta disponer
-  de masa corporal o reglas específicas fiables.
-- La distribución por grupo muscular cuenta todas las series contra el músculo primario de la
-  plantilla; no reparte series entre músculos secundarios ni estima series efectivas fraccionales.
+- El volumen `kg·repeticiones` sigue limitado a ejercicios de peso y repeticiones. Peso corporal,
+  asistencia, distancia y duración usan métricas propias para no fabricar un volumen incomparable.
+- Las series indirectas se ponderan a 0,5 como heurística transparente; no estiman activación o
+  hipertrofia fisiológica real.
 - El borrador creado antes de este endurecimiento sigue legible y en estado `draft`, pero no contiene
   opcionalidad ni justificaciones estructuradas por cambio. Debe revisarse o sustituirse, no
   aprobarse como si usara el contrato nuevo.
@@ -190,12 +250,18 @@ Actualizado: 2026-08-07
   que Telegram representa con botones cuando la interfaz interactiva está disponible.
 - MCP expone `sync_hevy` como reparación local confirmada: ejecuta una instantánea completa,
   idempotente y sin modificar rutinas en Hevy.
+- Las propuestas de planes admiten `weight_kg` por serie y lo convierten al campo de carga de
+  Hevy; las cargas solo deben incluirse con evidencia suficiente.
 
 ## Último hito completado
 
-Hito de sincronización posterior a escrituras y confirmación interactiva, sobre la base de
-ergonomía conversacional, superseries y enrutamiento de Telegram Topics, incluido `Alertas`; queda
-pendiente una aplicación real de superserie y la prueba de entrega automática en `Revisiones`.
+Diario nutricional conversacional (2026-09-14): catálogo, recetas, comidas, resumen diario y
+correcciones auditadas. Pendiente prueba de aceptación con una etiqueta real desde Telegram.
+
+Hito de sincronización posterior a escrituras, confirmación interactiva y cargas prescritas por
+serie, sobre la base de ergonomía conversacional, superseries y enrutamiento de Telegram Topics,
+incluido `Alertas`; queda pendiente una aplicación real de superserie y la prueba de entrega
+automática en `Revisiones`.
 
 ## Corrección verificada del contrato Hevy
 

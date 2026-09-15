@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: gym_coach
       POSTGRES_PASSWORD: gym_coach
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - gym_coach_postgres:/var/lib/postgresql/data
     healthcheck:
@@ -26,7 +26,7 @@ services:
       OLLAMA_FLASH_ATTENTION: "1"
       OLLAMA_KEEP_ALIVE: 10m
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - gym_coach_ollama:/root/.ollama
     healthcheck:

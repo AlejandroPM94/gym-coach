@@ -1,5 +1,64 @@
 # Registro de decisiones
 
+## 2026-09-15 — Revisiones alineadas con el backup y servicios locales en loopback
+
+- **Decisión:** mantener la revisión post-entrenamiento cada cinco minutos usando
+  `get_workout_coaching_review`, y ejecutar la revisión semanal los lunes a las 09:00 sobre la semana
+  anterior de lunes a domingo.
+- **Motivo:** el post-entrenamiento necesita el contrato unificado nuevo; el backup de Health Connect
+  del domingo llega de madrugada y una revisión dominical podía analizar una semana incompleta.
+- **Consecuencias:** el cron semanal usa `get_weekly_coaching_review`, comprueba cobertura y frescura,
+  y no crea cambios de rutina u objetivos sin una petición posterior del atleta.
+- **Decisión:** publicar PostgreSQL y el perfil opcional de Ollama solo en `127.0.0.1` durante el
+  desarrollo local.
+- **Motivo:** gym-coach, Hermes y sus pruebas se ejecutan en el mismo equipo y no necesitan aceptar
+  conexiones desde la red local.
+- **Consecuencias:** los procesos locales conservan acceso; para Oracle se usará una red privada de
+  contenedores y no se abrirá PostgreSQL a Internet.
+
+## 2026-09-15 — Evidencia histórica, progresión por modalidad y recuperación personal
+
+- **Decisión:** capturar cada versión observada de una rutina Hevy como instantánea inmutable y
+  vincular un entrenamiento solo cuando la fecha del proveedor demuestra que esa versión ya existía.
+  Si no puede demostrarse, la comparación usa la rutina actual y declara `current_fallback`.
+- **Motivo:** editar una rutina no debe cambiar retroactivamente la prescripción contra la que se
+  revisó una sesión; tampoco es válido inventar versiones anteriores a la primera observación.
+- **Consecuencias:** las 8 versiones capturadas al activar el cambio no permiten reconstruir los 94
+  entrenamientos previos vinculados. Los entrenamientos futuros sí quedarán enlazados cuando la fecha
+  de actualización de la rutina preceda a la sesión.
+- **Decisión:** seleccionar la métrica de progreso según el tipo de ejercicio y conservar RPE,
+  distancia y duración. Menor asistencia cuenta como mejora; la duración aislada no declara
+  estancamiento; una primera observación establece línea base y no es un récord.
+- **Decisión:** comparar los siete días completos recientes con los 21 anteriores para sueño, pulso
+  en reposo y HRV. Una señal adversa produce `monitor` y dos o más `possible_strain`. Pasos se muestran
+  como contexto, pero no elevan ese estado. El resultado no modifica planes automáticamente.
+- **Decisión:** informar estímulo muscular directo y secundario por separado. Cada serie del músculo
+  secundario aporta 0,5 series heurísticas al total; se presenta como ayuda de programación, no como
+  una medida fisiológica.
+
+## 2026-09-15 — Raciones, barcode y objetivo de fibra
+
+- **Decisión:** permitir un tamaño de ración opcional en los alimentos guardados, buscar códigos de
+  barras exactos en el catálogo personal y calcular fibra con un parámetro confirmado por 1000 kcal.
+- **Motivo:** reducir fricción al registrar productos repetidos y evitar que el agente calcule o
+  invente objetivos nutricionales.
+- **Consecuencias:** el código de barras identifica productos ya guardados y no consulta un catálogo
+  externo. `adult_targets_v2` usa 14 g/1000 kcal por defecto dentro de un rango explícito de 10–20;
+  objetivos v1 y comidas históricas siguen siendo legibles.
+
+## 2026-09-14 — Diario nutricional conversacional
+
+- **Decisión:** catálogo personal confirmado, recetas por ingredientes, diario con composición
+  inmutable y anulaciones auditadas en PostgreSQL. Cálculos Decimal y siete herramientas MCP.
+- **Motivo:** reutilizar etiquetas y platos habituales sin volver a pedir composición ni delegar
+  cálculos al modelo; preservar el historial al corregir productos.
+- **Alternativas:** diario en memoria de Hermes, integración con app externa o tablas de nutrientes
+  individuales. Se usa JSON tipado para instantáneas con fechas/tipos indexados, como las propuestas.
+- **Consecuencias:** UUID estable en reintentos, unidades explícitas, fecha con zona y confirmación
+  agrupada. Fibra desconocida y estimaciones se conservan. La procedencia es declarada/confirmada,
+  no verificación remota. Etiquetas dependen de la visión de Hermes; catálogo externo y OCR propio
+  quedan pendientes. No se infiere ingesta completa a partir de un diario parcial.
+
 ## 2026-08-06 — Superseries explícitas y agrupación de confirmaciones
 
 - **Decisión:** representar una superserie con un `superset_group` textual en la propuesta y
@@ -449,3 +508,65 @@
   rutina afectada.
 - **Consecuencias:** existe un fallback observable con contadores y `run_id`; sigue siendo una
   operación local confirmada y no sustituye los reintentos automáticos futuros.
+
+## 2026-08-07 — Cargas prescritas por serie en propuestas
+
+- **Decisión:** aceptar `weight_kg` opcional en cada serie de una propuesta y trasladarlo al campo
+  `weight_kg` del payload de rutina Hevy; mantener `load_guidance` cuando no exista una carga
+  justificada.
+- **Motivo:** Hevy permite guardar una carga planificada y el contrato anterior la descartaba al
+  convertir la propuesta, haciendo imposible prescribir pesos aunque el historial los respaldara.
+- **Alternativas:** guardar el peso solo en notas; inferir siempre la carga desde el último entrenamiento.
+- **Consecuencias:** el agente puede proponer cargas explícitas, pero debe resolver evidencia y no
+  inventar pesos; la comparación y reconciliación las validan como parte del contenido controlado.
+
+
+## 2026-09-14 — Seguimiento conjunto y Samsung Health
+
+- Objetivos calculados en Python con parámetros explícitos; versiones inmutables por fecha y huella
+  de preview. No se ajustan por una sesión o un peso aislado ni se suman calorías del reloj.
+- Cierre de días ligado al contenido del diario: corregir comidas invalida la cobertura confirmada.
+  Un acuse repetido no cierra una versión nueva. Diferencia frente a objetivo no es balance medido.
+- Check-ins y mediciones vuelven al contexto mediante revisión semanal; peso y cintura mantienen
+  cobertura separada. Las reglas de muestras mínimas y límites del calculador son políticas de
+  producto documentadas, no garantías clínicas.
+- Comparación de entrenamiento contra rutina actual identificada expresamente; no se inventan
+  versiones históricas ni se convierte cumplir mínimos en una orden de progresión de carga.
+- Samsung Health se integra mediante la exportación diaria nativa de Health Connect a Google Drive.
+  El backend descarga revisiones por conexión saliente, filtra Samsung para actividad y openScale
+  sync para composición BIA, procesa 30 días y conserva datos normalizados y auditoría en PostgreSQL.
+  Los pesajes automáticos permanecen separados de los manuales; BIA es una señal secundaria y
+  ausente es null. La cobertura detallada se amplió en la decisión del 2026-09-15.
+- La cuenta de servicio carece de roles de proyecto y solo recibe lectura sobre la carpeta dedicada.
+  El parser bloquea versiones SQLite desconocidas y archivos que incumplen límites o checksums.
+- La exportación continúa con frecuencia diaria en Android y un timer systemd local comprueba Drive
+  cada hora; las revisiones ya procesadas se reconocen de forma idempotente antes de descargarlas.
+- Arquitectura, activación y límites: `docs/HEALTH_CONNECT.md`; escenarios de calidad conversacional:
+  `docs/COACHING_ACCEPTANCE.md` (pendientes de ejecución real).
+
+## 2026-09-15 — Pesajes automáticos mediante openScale
+
+- **Estado:** la restricción inicial a peso y grasa quedó sustituida ese mismo día por la decisión
+  de señales ampliadas; se conserva aquí el criterio de tendencia que sigue vigente.
+
+- **Decisión:** importar solo `WeightRecord` y, como señal secundaria, `BodyFatRecord` cuyo origen
+  sea `com.health.openscale.sync`; conservar cada observación separada de las mediciones manuales.
+- **Motivo:** la Mi Body Composition Scale 2 puede transferir su historial por Bluetooth a openScale
+  y este escribir Health Connect. Peso aporta una tendencia útil; el porcentaje de grasa depende de
+  una BIA doméstica y las estimaciones de músculo mezclan definiciones incompatibles.
+- **Política vigente:** usar el primer pesaje openScale de cada día en las medias, exigir tres días en
+  ambas semanas para comparar y preferir una medición manual confirmada si coincide la fecha.
+- **Consecuencias:** el retraso del ZIP no cambia la fecha/hora original. Un objetivo nuevo puede usar
+  un pesaje openScale más reciente, pero sigue necesitando preview y confirmación explícita.
+
+## 2026-09-15 — Señales ampliadas de Health Connect
+
+- **Decisión:** normalizar todos los datos de entrenamiento y recuperación disponibles y útiles para
+  coaching, con Samsung como fuente de actividad y openScale como fuente corporal.
+- **Cobertura:** fases y horario de sueño, ejercicio por tipo, distancia, energía, pulso, pulso en
+  reposo, HRV, oxígeno, VO2 máx. y composición corporal. Las rutas GPS, nutrición clínica y muestras
+  crudas quedan fuera; de las series se conservan agregados diarios deterministas.
+- **Política:** las calorías del wearable no alteran objetivos. Peso es la medida corporal primaria;
+  el resto de BIA, pulso, oxígeno y VO2 son señales de tendencia con procedencia, sin diagnóstico.
+- **Consecuencia:** la revisión semanal recibe una vista compacta y auditable sin cargar al modelo con
+  decenas de miles de muestras ni duplicar entrenamientos de fuerza ya detallados por Hevy.

@@ -11,6 +11,7 @@ from gym_coach.config import Settings
 from gym_coach.integrations.hevy.errors import HevyHTTPError, HevyInvalidResponseError
 from gym_coach.integrations.hevy.schemas import Routine, RoutineWriteRequest, UserInfo
 from gym_coach.mcp.errors import ResourceNotFoundError
+from gym_coach.mcp.repository import _to_coach_proposal
 from gym_coach.mcp.schemas import (
     AthleteProfileUpdate,
     AthleteSummary,
@@ -416,6 +417,20 @@ async def test_server_initializes_and_enumerates_expected_tools() -> None:
 
     assert {tool.name for tool in registered} == {
         "get_system_status",
+        "search_nutrition_catalogue",
+        "save_nutrition_food",
+        "save_nutrition_recipe",
+        "preview_nutrition_meal",
+        "log_nutrition_meal",
+        "void_nutrition_meal",
+        "get_daily_nutrition",
+        "preview_nutrition_target",
+        "save_confirmed_nutrition_target",
+        "get_nutrition_day_review",
+        "confirm_nutrition_day",
+        "get_weekly_coaching_review",
+        "compare_workout_to_current_routine",
+        "get_workout_coaching_review",
         "get_hevy_connection_status",
         "sync_hevy",
         "get_athlete_summary",
@@ -605,6 +620,8 @@ def test_plan_sets_support_exactly_one_prescription_dimension() -> None:
 
     assert duration.duration_seconds_max == 60
     assert distance.distance_meters_min == Decimal("500")
+    weighted = ProposedPlanSet(weight_kg=Decimal("42.5"), reps_min=8, reps_max=10)
+    assert weighted.weight_kg == Decimal("42.5")
     with pytest.raises(ValidationError, match="exactly one"):
         ProposedPlanSet(reps_min=8, reps_max=10, duration_seconds_min=30, duration_seconds_max=60)
     with pytest.raises(ValidationError, match="provided together"):
@@ -894,6 +911,51 @@ def test_routine_request_assigns_shared_hevy_superset_ids() -> None:
     request = _routine_request(plan)
 
     assert [item.superset_id for item in request.routine.exercises] == [1, 1, None]
+
+
+def test_routine_request_preserves_prescribed_weight() -> None:
+    request = _routine_request(
+        {
+            "title": "Weighted upper",
+            "exercises": [
+                {
+                    "title": "Press",
+                    "exercise_template_external_id": "template-press",
+                    "rest_seconds": 120,
+                    "sets": [{"weight_kg": "42.5", "reps_min": 8, "reps_max": 10}],
+                }
+            ],
+        }
+    )
+
+    assert request.routine.exercises[0].sets[0].weight_kg == 42.5
+
+
+def test_public_plan_conversion_preserves_prescribed_weight() -> None:
+    public_plan = TrainingPlanProposalInput(
+        kind="new_routine",
+        title="Weighted upper",
+        summary="A plan with an evidenced load.",
+        rationale="The recent training history supports this starting load.",
+        evidence_ids=["history:bench"],
+        workouts=[
+            {
+                "title": "Upper",
+                "exercises": [
+                    {
+                        "title": "Press",
+                        "exercise_template_external_id": "template-press",
+                        "rest_seconds": 120,
+                        "sets": [{"weight_kg": "42.5", "reps_min": 8, "reps_max": 10}],
+                    }
+                ],
+            }
+        ],
+    )
+
+    internal = _to_coach_proposal(public_plan)
+
+    assert internal.workouts[0].exercises[0].sets[0].weight_kg == Decimal("42.5")
 
 
 async def test_hevy_not_configured_does_not_construct_client() -> None:

@@ -106,8 +106,9 @@ Consulta de prueba:
 
 > Consulta mi último entrenamiento usando gym-coach y resúmelo sin proponer todavía modificaciones.
 
-Hermes debe descubrir 27 herramientas. Para la consulta de prueba debe usar
-`get_recent_workouts` y después `get_workout`; no debe afirmar que ha modificado Hevy.
+Hermes debe descubrir 41 herramientas. Para la consulta de prueba debe usar
+`get_recent_workouts` y después `get_workout`; para una revisión completa debe usar
+`get_workout_coaching_review`. No debe afirmar que ha modificado Hevy.
 
 Para probar el entrenador integral, debe consultar primero `get_training_history_assessment` y
 `get_coaching_assessment`, entrevistar por bloques y pedir una única confirmación por bloque
@@ -136,6 +137,8 @@ La creación de un plan requiere una petición explícita del atleta y solo gene
 Hevy. Cada cambio necesita una justificación y evidencias vigentes. Las sesiones opcionales deben
 marcarse como tales; planchas, cardio y otros ejercicios temporales usan duración o distancia, no
 repeticiones ficticias. Para superseries, usa el mismo `superset_group` en ejercicios consecutivos.
+Para prescribir cargas, usa `weight_kg` por serie solo cuando exista evidencia suficiente; si no,
+conserva `load_guidance` para que el atleta elija la carga sin inventarla.
 
 ## 6. Revisión automática por Telegram
 

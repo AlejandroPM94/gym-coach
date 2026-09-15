@@ -68,8 +68,10 @@ from gym_coach.mcp.schemas import (
 )
 from gym_coach.metrics.service import ExerciseReport, MetricsError
 from gym_coach.metrics.types import MetricsSummary, StagnationResult
+from gym_coach.nutrition.service import NutritionService
 from gym_coach.sync.hevy import HevySyncError, routine_content_hash
 from gym_coach.sync.types import SyncResult as HevySyncRun
+from gym_coach.tracking.training import WorkoutComparison, compare_workout
 
 MAX_RECENT_WORKOUTS = 50
 MAX_EXERCISE_RESULTS = 25
@@ -142,6 +144,10 @@ class MCPReadRepository(Protocol):
     async def recent_workouts(self, limit: int) -> RecentWorkouts: ...
 
     async def get_workout(self, external_id: str) -> TrainingWorkout | None: ...
+
+    async def get_workout_prescription(
+        self, workout_id: str
+    ) -> tuple[TrainingRoutine, Literal["historical_snapshot", "current_fallback"]] | None: ...
 
     async def search_exercise_templates(
         self, query: str, limit: int
@@ -222,12 +228,14 @@ class MCPTools:
         metrics: MCPMetricsReader,
         hevy_client_factory: HevyClientFactory,
         hevy_sync_factory: HevySyncFactory | None = None,
+        nutrition: NutritionService | None = None,
     ) -> None:
         self._settings = settings
         self._repository = repository
         self._metrics = metrics
         self._hevy_client_factory = hevy_client_factory
         self._hevy_sync_factory = hevy_sync_factory
+        self.nutrition = nutrition
 
     async def get_system_status(self) -> SystemStatus:
         postgres = await self._postgres_status()
@@ -370,6 +378,16 @@ class MCPTools:
             raise ResourceNotFoundError("Training workout was not found")
         return result
 
+    async def compare_workout_to_prescription(self, workout_id: str) -> WorkoutComparison:
+        workout = await self.get_workout(workout_id)
+        prescription = await self._database_call(
+            lambda: self._repository.get_workout_prescription(workout_id)
+        )
+        if prescription is None:
+            raise ResourceNotFoundError("Workout has no linked routine prescription")
+        routine, source = prescription
+        return compare_workout(routine, workout, prescription_source=source)
+
     async def search_exercise_templates(
         self, query: str, limit: int = 10
     ) -> ExerciseTemplateSearchResults:
@@ -421,7 +439,11 @@ class MCPTools:
         )
 
     async def get_exercise_progress(
-        self, exercise_template_id: str, window_days: int = 180
+        self,
+        exercise_template_id: str,
+        window_days: int = 180,
+        *,
+        as_of: datetime | None = None,
     ) -> ExerciseProgressReport:
         normalized_id = _validated_identifier(exercise_template_id, "exercise_template_id")
         if not 30 <= window_days <= 730:
@@ -431,7 +453,7 @@ class MCPTools:
         )
         if not exists:
             raise ResourceNotFoundError("Exercise template was not found")
-        now = datetime.now(UTC)
+        now = as_of or datetime.now(UTC)
         try:
             report = await self._metrics.exercise_report(
                 normalized_id,
@@ -452,6 +474,12 @@ class MCPTools:
             previous_e1rm_kg=_decimal_string(progress.previous_e1rm_kg),
             e1rm_change_kg=_decimal_string(progress.e1rm_change_kg),
             e1rm_change_percent=_decimal_string(progress.e1rm_change_percent),
+            progress_metric=progress.progress_metric,
+            latest_metric_value=_decimal_string(progress.latest_metric_value),
+            previous_metric_value=_decimal_string(progress.previous_metric_value),
+            best_metric_value=_decimal_string(progress.best_metric_value),
+            metric_change_percent=_decimal_string(progress.metric_change_percent),
+            latest_is_personal_record=progress.latest_is_personal_record,
             stagnation=_stagnation_summary(report.stagnation),
             sessions=[
                 ExerciseSessionSummary(
@@ -461,6 +489,13 @@ class MCPTools:
                     volume_kg_reps=str(item.volume_kg_reps),
                     best_e1rm_kg=_decimal_string(item.best_e1rm_kg),
                     qualifying_sets=item.qualifying_sets,
+                    working_sets=item.working_sets,
+                    best_weight_kg=_decimal_string(item.best_weight_kg),
+                    minimum_weight_kg=_decimal_string(item.minimum_weight_kg),
+                    max_reps=item.max_reps,
+                    total_distance_meters=str(item.total_distance_meters),
+                    total_duration_seconds=item.total_duration_seconds,
+                    mean_rpe=_decimal_string(item.mean_rpe),
                 )
                 for item in progress.sessions
             ],
@@ -884,6 +919,7 @@ def _routine_set(item: object) -> RoutineWriteSet:
     set_type = "dropset" if planned.set_type == "drop" else planned.set_type
     return RoutineWriteSet(
         set_type=set_type,
+        weight_kg=float(planned.weight_kg) if planned.weight_kg is not None else None,
         reps=None,
         rep_range=(
             RepRange(start=planned.reps_min, end=planned.reps_max)

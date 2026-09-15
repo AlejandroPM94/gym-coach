@@ -21,6 +21,16 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://gym_coach:gym_coach@localhost:5432/gym_coach",
         alias="GYM_COACH_DATABASE_URL",
     )
+    google_drive_service_account_file: Path | None = Field(
+        default=None, alias="GYM_COACH_GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE"
+    )
+    google_drive_health_folder_id: str | None = Field(
+        default=None, alias="GYM_COACH_GOOGLE_DRIVE_HEALTH_FOLDER_ID"
+    )
+    google_drive_health_filename: str = Field(
+        default="Health Connect.zip", alias="GYM_COACH_GOOGLE_DRIVE_HEALTH_FILENAME"
+    )
+    health_timezone: str = Field(default="Europe/Madrid", alias="GYM_COACH_HEALTH_TIMEZONE")
     hevy_api_key: SecretStr | None = Field(default=None, alias="HEVY_API_KEY")
     coach_provider: Literal["ollama", "openai"] = Field(
         default="ollama", alias="GYM_COACH_PROVIDER"

@@ -1,8 +1,31 @@
 # Siguientes pasos
 
-Actualizado: 2026-08-07
+Actualizado: 2026-09-15
+
+## Google Drive activo
+
+La cuenta de servicio, la lectura limitada a `gym-coach-health`, la primera importación real y el
+timer systemd horario están activos. La revisión ampliada actual ya se importó con 30 días y
+agregados de actividad, sueño, cardio y recuperación. Falta validar su presentación conversacional
+mediante `get_weekly_coaching_review` y observar el siguiente ZIP diario.
+El importador ya admite peso y composición BIA de openScale sync; falta verificar el primer pesaje
+válido matutino después de retirar el registro de prueba.
 
 ## Siguiente hito
+
+Prioridad: aceptación conversacional de la skill 0.9.0 y observación de datos nuevos reales.
+
+1. En otras instalaciones, aplicar `c31e6c1124ab`, recargar Hermes y verificar las 41 herramientas;
+   la instalación local ya está actualizada y comprobada.
+2. Verificar las nuevas señales, `last_observed_at` y el primer pesaje openScale en la revisión
+   semanal tras el siguiente backup.
+3. Confirmar objetivos nutricionales con preview; validar etiqueta, receta y comida desde Telegram,
+   cierre de día y corrección que invalida el cierre.
+4. Ejecutar los escenarios conversacionales de `docs/COACHING_ACCEPTANCE.md`, incluido el nuevo
+   informe post-entrenamiento, y registrar resultados
+   sanitizados. La matriz preparada no equivale a una evaluación aprobada del modelo.
+5. Preparar Oracle Cloud: red privada, volúmenes y copias de seguridad de PostgreSQL, secretos fuera
+   de la imagen, servicios persistentes y migración verificada antes de cambiar las automatizaciones.
 
 Validar una propuesta con superseries y la entrega automática post-entrenamiento en el Topic
 `Revisiones`; después completar el resto del mapa de Topics y observar el primer reinicio con
@@ -34,10 +57,10 @@ También debe probarse `sync_hevy` desde Hermes cuando una sincronización poste
 ## Dependencias
 
 - PostgreSQL saludable, migración nueva aplicada y sincronización Hevy reciente.
-- Hermes gateway activo, MCP reiniciado y skill 0.6.4 enlazada al repositorio.
+- Hermes gateway activo, MCP reiniciado y skill 0.9.0 enlazada al repositorio.
 - Petición explícita del plan y una confirmación final distinta para aplicarlo.
 - Capacidad suficiente en Hevy para las tres sesiones restantes.
-- La skill enlazada y el proceso MCP deben recargarse después de este cambio.
+- En otras instalaciones, la skill enlazada y el proceso MCP deben recargarse después del cambio.
 
 ## Criterios de aceptación
 
@@ -55,13 +78,17 @@ También debe probarse `sync_hevy` desde Hermes cuando una sincronización poste
 - La confirmación final se presenta como selección interactiva de aprobar/denegar en Telegram cuando
   Hermes dispone de botones; la respuesta textual sigue siendo solo fallback.
 - `sync_hevy` exige confirmación local y devuelve contadores de la instantánea sin escribir en Hevy.
+- Probar una rutina nueva con cargas prescritas en `weight_kg` y verificar que Hevy las muestra por
+  serie tras la sincronización.
+- Validar en una propuesta real que las cargas justificadas aparecen en Hevy y en la copia de
+  PostgreSQL después de la sincronización posterior a la escritura.
 - Una actualización cuya respuesta tenga `routine` como lista de un elemento se interpreta sin
   error; una lista de varios elementos se rechaza de forma segura.
 
 ## Trabajo aplazado
 
-- Samsung Health/Health Connect y automatización de actividad diaria.
-- Registro detallado de comidas o integración con una aplicación nutricional.
+- Samsung Health: conservar más de 28 días en cada revisión o importar rutas GPS/muestras crudas.
+- Integración con una app nutricional externa o catálogo externo automático.
 - RAG/vector store; por ahora se usa catálogo versionado y trazable más investigación web.
 - Interfaz web y una integración Telegram propia dentro de `gym-coach`.
 - Diagnóstico médico, nutrición clínica y prescripción para patologías.

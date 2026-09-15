@@ -122,7 +122,7 @@ dominios válidos y reglas de estancamiento están documentados en `docs/METRICS
 ## Entrenador IA
 
 Hermes es el orquestador conversacional principal inicial. Arranca `gym-coach` por `stdio`, descubre
-27 herramientas MCP y recibe contratos Pydantic independientes de Hevy y del ORM. Incluyen una
+41 herramientas MCP y recibe contratos Pydantic independientes de Hevy y del ORM. Incluyen una
 entrevista ampliada, evaluación histórica, mediciones/check-ins y el flujo controlado de aplicación
 en Hevy. La instalación y configuración están en `docs/HERMES_SETUP.md`.
 
@@ -162,6 +162,15 @@ duración estimada y objetivos por repeticiones, tiempo o distancia. Cada cambio
 el backend vuelve a calcular o validar; las comparaciones de ejercicios, series y grupos musculares
 se realizan de forma determinista en Python.
 
+Cada sincronización conserva versiones inmutables de las rutinas. Las sesiones futuras se enlazan
+a la prescripción que ya existía al entrenar; si Hevy no aporta fechas suficientes para demostrarlo,
+el informe declara que usa la rutina actual como fallback. `get_workout_coaching_review` reúne esa
+comparación, progreso específico de cada modalidad, RPE y contexto de recuperación en un solo
+contrato para la revisión automática.
+
+El diario de comidas, catálogo personal y recetas reutilizables están documentados en
+[Nutrición](docs/NUTRITION.md). Requiere aplicar la migración y recargar Hermes.
+
 ## Revisión automática post-entrenamiento
 
 `uv run gym-coach automation poll-hevy` consulta el feed incremental público de Hevy. La primera
@@ -173,3 +182,12 @@ La tarea recomendada se ejecuta cada cinco minutos con la skill `gym-coach`, ent
 Topic `Revisiones` y mantiene los avisos operativos del gateway en `Alertas`; no invoca al modelo cuando no hay cambios. El gateway debe estar activo y
 el usuario debe haber iniciado una conversación con el bot. Esta automatización sigue siendo de solo
 lectura respecto a Hevy.
+
+
+## Seguimiento nutricional y Samsung Health
+
+El MCP incluye objetivos nutricionales confirmados, cierre de días y revisión semanal conjunta de
+alimentación, entrenamiento, mediciones, check-ins y actividad. Consulta [nutrición](docs/NUTRITION.md)
+y [sincronización de Samsung Health mediante Drive](docs/HEALTH_CONNECT.md). El backend descarga la
+exportación diaria de Health Connect sin abrir puertos ni requerir una app Android propia; acepta
+actividad, sueño, cardio y recuperación de Samsung y composición de openScale sync con procedencia.

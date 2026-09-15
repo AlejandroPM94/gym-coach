@@ -1,7 +1,9 @@
 import asyncio
 from collections.abc import Awaitable
+from datetime import date
 from typing import Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
@@ -48,7 +50,29 @@ from gym_coach.mcp.schemas import (
 )
 from gym_coach.mcp.tools import MCPTools
 from gym_coach.metrics.service import MetricsService
+from gym_coach.nutrition.schemas import (
+    CatalogueItem,
+    DailyNutrition,
+    FoodInput,
+    MealInput,
+    MealPreview,
+    MealRecord,
+    RecipeInput,
+    VoidResult,
+)
+from gym_coach.nutrition.service import NutritionService
 from gym_coach.sync.hevy import HevySyncService
+from gym_coach.tracking.schemas import (
+    DayClosure,
+    NutritionDayReview,
+    TargetParameters,
+    TargetPreview,
+    TargetVersion,
+    WeeklyReview,
+    WorkoutCoachingReview,
+)
+from gym_coach.tracking.service import TrackingService
+from gym_coach.tracking.training import WorkoutComparison
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True)
 WRITE_LOCAL = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False)
@@ -253,6 +277,157 @@ def create_mcp_server(tools: MCPTools) -> MCPServer[None]:
         """Mark a claimed automatic review complete after its Telegram brief is prepared."""
         return await _safe(tools.acknowledge_automatic_workout_review(review_id))
 
+    def nutrition() -> NutritionService:
+        if tools.nutrition is None:
+            raise ValueError("Nutrition storage is not configured")
+        return tools.nutrition
+
+    @server.tool(annotations=READ_ONLY)
+    async def search_nutrition_catalogue(query: str) -> list[CatalogueItem]:
+        """Search saved personal foods and recipes (up to 25 results)."""
+        return await _safe(nutrition().search(query))
+
+    @server.tool(annotations=SYNC_LOCAL)
+    async def save_nutrition_food(
+        request_id: UUID,
+        food: FoodInput,
+        user_confirmed: Literal[True],
+    ) -> CatalogueItem:
+        """Save confirmed label/reference values per 100 g/ml. Reuse request_id on retry.
+
+        A new composition creates a new ID; old records remain immutable. Never invent nutrients.
+        """
+        return await _safe(nutrition().save_food(request_id, food, user_confirmed))
+
+    @server.tool(annotations=SYNC_LOCAL)
+    async def save_nutrition_recipe(
+        request_id: UUID,
+        recipe: RecipeInput,
+        user_confirmed: Literal[True],
+    ) -> CatalogueItem:
+        """Save a confirmed habitual meal/recipe from stored ingredients; Python computes totals."""
+        return await _safe(nutrition().save_recipe(request_id, recipe, user_confirmed))
+
+    @server.tool(annotations=READ_ONLY)
+    async def preview_nutrition_meal(meal: MealInput) -> MealPreview:
+        """Resolve catalogue IDs and calculate meal totals before confirmation; no write."""
+        return await _safe(nutrition().preview(meal))
+
+    @server.tool(annotations=SYNC_LOCAL)
+    async def log_nutrition_meal(
+        request_id: UUID,
+        meal: MealInput,
+        user_confirmed: Literal[True],
+    ) -> MealRecord:
+        """Log the confirmed preview with timezone-aware time; retry with the same request_id."""
+        return await _safe(nutrition().log_meal(request_id, meal, user_confirmed))
+
+    @server.tool(annotations=SYNC_LOCAL)
+    async def void_nutrition_meal(
+        meal_id: UUID,
+        reason: str,
+        user_confirmed: Literal[True],
+    ) -> VoidResult:
+        """Correct an erroneous meal without deleting its audit trail; then log its replacement."""
+        return await _safe(nutrition().void(meal_id, reason, user_confirmed))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_daily_nutrition(day: date, timezone: str = "Europe/Madrid") -> DailyNutrition:
+        """Return meals and Python totals for a local date. Missing logs are not zero intake."""
+        return await _safe(nutrition().daily(day, timezone))
+
+    def tracking() -> TrackingService:
+        return TrackingService(nutrition().factory)
+
+    @server.tool(annotations=READ_ONLY)
+    async def preview_nutrition_target(parameters: TargetParameters) -> TargetPreview:
+        """Calculate adult targets; explain parameters before confirmation."""
+        return await _safe(tracking().preview_target(parameters))
+
+    @server.tool(annotations=SYNC_LOCAL)
+    async def save_confirmed_nutrition_target(
+        request_id: UUID, preview: TargetPreview, user_confirmed: Literal[True]
+    ) -> TargetVersion:
+        """Save the exact confirmed target preview as an immutable effective-dated version."""
+        return await _safe(tracking().save_target(request_id, preview, user_confirmed))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_nutrition_day_review(
+        day: date, timezone: str = "Europe/Madrid"
+    ) -> NutritionDayReview:
+        """Return target, totals, coverage fingerprint and complete-day differences."""
+        return await _safe(tracking().day_review(day, timezone))
+
+    @server.tool(annotations=SYNC_LOCAL)
+    async def confirm_nutrition_day(
+        request_id: UUID, closure: DayClosure, user_confirmed: Literal[True]
+    ) -> DayClosure:
+        """Confirm or reopen diary coverage using the fingerprint from the day review."""
+        return await _safe(tracking().close_day(request_id, closure, user_confirmed))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_weekly_coaching_review(
+        end_day: date, timezone: str = "Europe/Madrid"
+    ) -> WeeklyReview:
+        """Retrieve nutrition comparisons, measurements and wellbeing trends."""
+        return await _safe(tracking().weekly_review(end_day, timezone))
+
+    @server.tool(annotations=READ_ONLY)
+    async def compare_workout_to_current_routine(workout_id: str) -> WorkoutComparison:
+        """Compare recorded sets with their captured prescription, falling back explicitly."""
+        return await _safe(tools.compare_workout_to_prescription(workout_id))
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_workout_coaching_review(
+        workout_id: str, timezone: str = "Europe/Madrid"
+    ) -> WorkoutCoachingReview:
+        """Build one deterministic post-workout evidence bundle for the coach."""
+        try:
+            zone = ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise GymCoachMCPError("Unknown timezone") from exc
+        workout = await _safe(tools.get_workout(workout_id))
+        comparison = await _safe(tools.compare_workout_to_prescription(workout_id))
+        template_ids = list(
+            dict.fromkeys(item.exercise_template_external_id for item in workout.exercises)
+        )
+        progress = [
+            await _safe(tools.get_exercise_progress(template_id, 180, as_of=workout.end_time))
+            for template_id in template_ids
+        ]
+        workout_day = workout.start_time.astimezone(zone).date()
+        activity = await _safe(tracking().activity_summary(workout_day, timezone))
+        flags = []
+        if any(item.latest_is_personal_record for item in progress):
+            flags.append("personal_record")
+        if any(item.stagnation.is_stalled for item in progress):
+            flags.append("stagnation")
+        if comparison.below_sets or comparison.missing_sets:
+            flags.append("prescription_not_fully_met")
+        if activity.recovery.status in {"monitor", "possible_strain"}:
+            flags.append(f"recovery_{activity.recovery.status}")
+        latest_rpes = [
+            session.mean_rpe
+            for report in progress
+            for session in report.sessions[-1:]
+            if session.mean_rpe is not None
+        ]
+        questions = ["¿Hubo dolor o una limitación técnica relevante durante la sesión?"]
+        if not latest_rpes:
+            questions.append("¿Qué esfuerzo percibido global, de 1 a 10, tuvo la sesión?")
+        return WorkoutCoachingReview(
+            workout=workout,
+            comparison=comparison,
+            exercise_progress=progress,
+            activity=activity,
+            flags=flags,
+            follow_up_questions=questions,
+            limitations=[
+                "The bundle reports recorded performance; it cannot observe exercise technique.",
+                "A single workout never authorizes an automatic routine or target change.",
+            ],
+        )
+
     return server
 
 
@@ -283,6 +458,7 @@ def build_mcp_tools(settings: Settings) -> tuple[MCPTools, AsyncEngine]:
         MetricsService(session_factory),
         hevy_client_factory,
         hevy_sync_factory,
+        NutritionService(session_factory),
     ), engine
 
 

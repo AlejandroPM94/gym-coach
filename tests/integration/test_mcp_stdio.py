@@ -25,7 +25,7 @@ async def test_stdio_server_lists_and_calls_tool_without_real_credentials() -> N
         listed = await client.list_tools()
         result = await client.call_tool("get_hevy_connection_status", {})
 
-    assert len(listed.tools) == 27
+    assert len(listed.tools) == 41
     assert result.is_error is False
     assert result.structured_content == {
         "configured": False,

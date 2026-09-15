@@ -1,6 +1,6 @@
 # Contrato de métricas deportivas
 
-Actualizado: 2026-08-05
+Actualizado: 2026-09-15
 
 ## Unidades y redondeo
 
@@ -16,13 +16,16 @@ Actualizado: 2026-08-05
 - e1RM: las mismas condiciones, limitado a 1-12 repeticiones.
 - `warmup`, `drop`, tipos desconocidos, carga nula/cero, duración y distancia no producen volumen
   ni e1RM. Las repeticiones altas sí suman repeticiones y volumen, pero no e1RM.
-- Peso corporal lastrado/asistido queda excluido hasta disponer de masa corporal fiable.
+- Peso corporal lastrado/asistido queda excluido del volumen `kg·repeticiones`; su progreso usa la
+  carga externa o la asistencia y no necesita fingir una masa corporal ausente.
 
 ## Evolución
 
-Se agrupa exclusivamente por `exercise_template_external_id`. Cada sesión informa repeticiones,
-volumen y mejor e1RM; la evolución compara las dos últimas sesiones con e1RM elegible. No se mezclan
-plantillas aunque compartan título o grupo muscular.
+Se agrupa exclusivamente por `exercise_template_external_id`. Cada sesión informa series de trabajo,
+repeticiones, volumen, mejor e1RM, cargas máxima/mínima, distancia, duración y RPE medio disponible.
+La evolución selecciona una métrica según el tipo: e1RM, carga externa, asistencia (menos es mejor),
+repeticiones, distancia o duración. Un primer registro establece línea base y no se marca como récord.
+No se mezclan plantillas aunque compartan título o grupo muscular.
 Los entrenamientos con borrado lógico se excluyen; una plantilla borrada se conserva para poder
 interpretar correctamente entrenamientos históricos que todavía la referencian.
 
@@ -35,6 +38,8 @@ representa un plan persistido.
 ## Estancamiento
 
 Regla por defecto: últimas 6 sesiones elegibles, al menos 4 sesiones, al menos 14 días entre primera
-y última, y mejora del mejor e1RM inferior al 2%. Los resultados posibles son
+y última, y mejora de la métrica elegida inferior al 2%. Se admite e1RM, carga externa, menor
+asistencia, repeticiones o distancia. La duración aislada queda como métrica de progreso descriptiva,
+pero no produce una señal de estancamiento sin ritmo, carga u objetivo. Los resultados posibles son
 `insufficient_sessions`, `insufficient_time_span`, `below_improvement_threshold` y `progressing`.
 Es una señal determinista dependiente de la ventana, no un diagnóstico ni una recomendación.

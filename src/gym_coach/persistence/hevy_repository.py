@@ -13,6 +13,7 @@ from gym_coach.persistence.models import (
     Routine,
     RoutineExercise,
     RoutineSet,
+    RoutineVersion,
     SyncRun,
     Workout,
     WorkoutExercise,
@@ -164,6 +165,7 @@ class HevyRepository:
             ).all()
         }
         for record in records:
+            await self._store_routine_version(record, seen_at)
             item = existing.get(record.external_id)
             if item is None:
                 item = Routine(
@@ -215,7 +217,9 @@ class HevyRepository:
                 )
             ).all()
         }
+        versions = list(await self._session.scalars(select(RoutineVersion)))
         for record in records:
+            routine_version_id = self._matching_routine_version(record, versions)
             item = existing.get(record.external_id)
             if item is None:
                 item = Workout(
@@ -230,6 +234,7 @@ class HevyRepository:
                     content_hash=record.content_hash,
                     last_seen_at=seen_at,
                     last_seen_sync_id=run_id,
+                    routine_version_id=routine_version_id,
                 )
                 item.exercises = self._workout_exercises(record.exercises)
                 self._session.add(item)
@@ -250,11 +255,95 @@ class HevyRepository:
                     item.source_created_at = record.source_created_at
                     item.source_updated_at = record.source_updated_at
                     item.exercises = self._workout_exercises(record.exercises)
+                if item.routine_version_id is None:
+                    item.routine_version_id = routine_version_id
                 self._touch(item, record.content_hash, run_id, seen_at)
                 counts.add(outcome)
         return self._mark_missing_deleted(
             existing.values(), {r.external_id for r in records}, seen_at, run_id
         )
+
+    async def _store_routine_version(self, record: RoutineRecord, seen_at: datetime) -> None:
+        exists = await self._session.scalar(
+            select(RoutineVersion.id).where(
+                RoutineVersion.routine_external_id == record.external_id,
+                RoutineVersion.content_hash == record.content_hash,
+            )
+        )
+        if exists is None:
+            self._session.add(
+                RoutineVersion(
+                    routine_external_id=record.external_id,
+                    content_hash=record.content_hash,
+                    source_updated_at=record.source_updated_at,
+                    observed_at=seen_at,
+                    payload=self._routine_version_payload(record),
+                )
+            )
+            await self._session.flush()
+
+    @staticmethod
+    def _matching_routine_version(
+        workout: WorkoutRecord, versions: list[RoutineVersion]
+    ) -> UUID | None:
+        if workout.routine_external_id is None:
+            return None
+        eligible = [
+            version
+            for version in versions
+            if version.routine_external_id == workout.routine_external_id
+            and version.source_updated_at is not None
+            and version.source_updated_at <= workout.start_time
+        ]
+        if not eligible:
+            return None
+        return max(
+            eligible,
+            key=lambda version: (
+                version.source_updated_at
+                if version.source_updated_at is not None
+                else workout.start_time
+            ),
+        ).id
+
+    @staticmethod
+    def _routine_version_payload(record: RoutineRecord) -> dict[str, object]:
+        return {
+            "external_id": record.external_id,
+            "title": record.title,
+            "folder_id": record.folder_id,
+            "updated_at": record.source_updated_at.isoformat()
+            if record.source_updated_at
+            else None,
+            "exercises": [
+                {
+                    "position": exercise.position + 1,
+                    "exercise_template_external_id": exercise.exercise_template_external_id,
+                    "title": exercise.title,
+                    "notes": exercise.notes,
+                    "rest_seconds": exercise.rest_seconds,
+                    "superset_id": exercise.superset_id,
+                    "sets": [
+                        {
+                            "position": item.position + 1,
+                            "set_type": item.set_type,
+                            "weight_kg": str(item.weight_kg)
+                            if item.weight_kg is not None
+                            else None,
+                            "reps": item.reps,
+                            "rep_range_start": item.rep_range_start,
+                            "rep_range_end": item.rep_range_end,
+                            "distance_meters": str(item.distance_meters)
+                            if item.distance_meters is not None
+                            else None,
+                            "duration_seconds": item.duration_seconds,
+                        }
+                        for item in exercise.sets
+                    ],
+                }
+                for exercise in record.exercises
+            ],
+        }
 
     @staticmethod
     def _touch(

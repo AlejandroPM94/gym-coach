@@ -1,0 +1,10 @@
+[Unit]
+Description=Import scheduled Health Connect export from Google Drive
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/alexpm/code/gym-coach
+EnvironmentFile=/home/alexpm/code/gym-coach/.env
+ExecStart=/home/alexpm/.local/bin/uv run --no-sync gym-coach automation sync-health-drive
+UMask=0077

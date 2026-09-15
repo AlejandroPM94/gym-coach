@@ -3,6 +3,7 @@ import json
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Literal, cast
 from uuid import UUID
 
@@ -78,10 +79,12 @@ from gym_coach.persistence.models import (
     AthleteProfile,
     CoachProposal,
     ExerciseTemplate,
+    HealthBodyMeasurement,
     HevyUser,
     Routine,
     RoutineApplication,
     RoutineExercise,
+    RoutineVersion,
     TrainingGoal,
     Workout,
     WorkoutExercise,
@@ -153,7 +156,7 @@ class PostgresMCPRepository:
                 pending.append("nutrition_reviewed")
             if not profile.health_reviewed:
                 pending.append("health_reviewed")
-            has_weight = bool(
+            has_manual_weight = bool(
                 await session.scalar(
                     select(func.count())
                     .select_from(AthleteMeasurement)
@@ -163,7 +166,14 @@ class PostgresMCPRepository:
                     )
                 )
             )
-            if not has_weight:
+            has_wearable_weight = bool(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(HealthBodyMeasurement)
+                    .where(HealthBodyMeasurement.weight_kg.is_not(None))
+                )
+            )
+            if not has_manual_weight and not has_wearable_weight:
                 pending.append("current_weight")
             if not goals:
                 pending.append("goals")
@@ -279,12 +289,28 @@ class PostgresMCPRepository:
                 select(AthleteProfile).where(AthleteProfile.profile_key == "default")
             )
             measurement = None
+            wearable_measurement = None
             goals: list[TrainingGoal] = []
             if profile is not None:
                 measurement = await session.scalar(
                     select(AthleteMeasurement)
-                    .where(AthleteMeasurement.profile_id == profile.id)
+                    .where(
+                        AthleteMeasurement.profile_id == profile.id,
+                        AthleteMeasurement.weight_kg.is_not(None),
+                        AthleteMeasurement.measured_on <= date.today(),
+                    )
                     .order_by(AthleteMeasurement.measured_on.desc())
+                )
+                wearable_measurement = await session.scalar(
+                    select(HealthBodyMeasurement)
+                    .where(
+                        HealthBodyMeasurement.weight_kg.is_not(None),
+                        HealthBodyMeasurement.measured_on <= date.today(),
+                    )
+                    .order_by(
+                        HealthBodyMeasurement.measured_on.desc(),
+                        HealthBodyMeasurement.measured_at.asc(),
+                    )
                 )
                 goals = list(
                     await session.scalars(
@@ -331,11 +357,39 @@ class PostgresMCPRepository:
             if not goals:
                 missing.append("goals")
                 questions.append("Define a measurable primary goal and timeframe.")
-        weight = measurement.weight_kg if measurement is not None else None
+        use_wearable = wearable_measurement is not None and (
+            measurement is None or wearable_measurement.measured_on > measurement.measured_on
+        )
+        weight = (
+            wearable_measurement.weight_kg
+            if use_wearable and wearable_measurement is not None
+            else measurement.weight_kg
+            if measurement is not None
+            else None
+        )
+        weight_measured_on = (
+            wearable_measurement.measured_on
+            if use_wearable and wearable_measurement is not None
+            else measurement.measured_on
+            if measurement is not None
+            else None
+        )
         bmi = None
         resting_energy = None
         protein = None
-        if profile is not None and weight is not None:
+        if (
+            profile is not None
+            and profile.birth_year is not None
+            and not 19 <= date.today().year - profile.birth_year <= 100
+        ):
+            missing.append("adult_age_not_established")
+            questions.append("Confirm age; adult estimates are unavailable for this birth year.")
+        if (
+            profile is not None
+            and weight is not None
+            and profile.birth_year is not None
+            and "adult_age_not_established" not in missing
+        ):
             protein = protein_range(weight)
             if profile.height_cm is not None:
                 bmi = str(calculate_bmi(weight, profile.height_cm))
@@ -343,7 +397,7 @@ class PostgresMCPRepository:
                 resting_energy = calculate_mifflin_st_jeor(
                     weight_kg=weight,
                     height_cm=profile.height_cm,
-                    age=max(date.today().year - profile.birth_year, 18),
+                    age=date.today().year - profile.birth_year,
                     sex=profile.sex_for_energy_equation or "unspecified",
                 )
         clinical_flags = bool(
@@ -372,6 +426,14 @@ class PostgresMCPRepository:
             missing_or_unreviewed=missing,
             priority_questions=questions,
             latest_weight_kg=str(weight) if weight is not None else None,
+            latest_weight_measured_on=weight_measured_on,
+            latest_weight_source=(
+                "health_connect_openscale"
+                if use_wearable
+                else "confirmed_manual"
+                if measurement is not None
+                else None
+            ),
             bmi=bmi,
             resting_energy_kcal=resting_energy,
             protein_range_g_per_day=protein,
@@ -631,6 +693,26 @@ class PostgresMCPRepository:
             ],
         )
 
+    async def get_workout_prescription(
+        self, workout_id: str
+    ) -> tuple[TrainingRoutine, Literal["historical_snapshot", "current_fallback"]] | None:
+        async with self._session_factory() as session:
+            workout = await session.scalar(
+                select(Workout).where(
+                    Workout.external_id == workout_id,
+                    Workout.deleted_at.is_(None),
+                )
+            )
+            if workout is None or workout.routine_external_id is None:
+                return None
+            routine_external_id = workout.routine_external_id
+            if workout.routine_version_id is not None:
+                version = await session.get(RoutineVersion, workout.routine_version_id)
+                if version is not None:
+                    return TrainingRoutine.model_validate(version.payload), "historical_snapshot"
+        current = await self.get_routine(routine_external_id)
+        return (current, "current_fallback") if current is not None else None
+
     async def search_exercise_templates(
         self, query: str, limit: int
     ) -> ExerciseTemplateSearchResults:
@@ -818,10 +900,23 @@ class PostgresMCPRepository:
         muscle_group_changes = [
             MuscleGroupPlanChange(
                 muscle_group=muscle_group,
-                current_sets=current_muscles.get(muscle_group, 0),
-                proposed_sets=proposed_muscles.get(muscle_group, 0),
+                current_sets=current_muscles.get(muscle_group, _EMPTY_STIMULUS).direct,
+                proposed_sets=proposed_muscles.get(muscle_group, _EMPTY_STIMULUS).direct,
                 set_delta=(
-                    proposed_muscles.get(muscle_group, 0) - current_muscles.get(muscle_group, 0)
+                    proposed_muscles.get(muscle_group, _EMPTY_STIMULUS).direct
+                    - current_muscles.get(muscle_group, _EMPTY_STIMULUS).direct
+                ),
+                current_indirect_sets=current_muscles.get(muscle_group, _EMPTY_STIMULUS).indirect,
+                proposed_indirect_sets=proposed_muscles.get(muscle_group, _EMPTY_STIMULUS).indirect,
+                current_total_stimulus_sets=current_muscles.get(
+                    muscle_group, _EMPTY_STIMULUS
+                ).total,
+                proposed_total_stimulus_sets=proposed_muscles.get(
+                    muscle_group, _EMPTY_STIMULUS
+                ).total,
+                total_stimulus_delta=(
+                    proposed_muscles.get(muscle_group, _EMPTY_STIMULUS).total
+                    - current_muscles.get(muscle_group, _EMPTY_STIMULUS).total
                 ),
             )
             for muscle_group in sorted(set(current_muscles) | set(proposed_muscles))
@@ -1087,19 +1182,26 @@ class PostgresMCPRepository:
                 if unknown:
                     raise ValueError("proposal references unknown or inactive exercise templates")
 
-    async def _exercise_muscle_groups(self, external_ids: set[str]) -> dict[str, str]:
+    async def _exercise_muscle_groups(
+        self, external_ids: set[str]
+    ) -> dict[str, tuple[str, tuple[str, ...]]]:
         if not external_ids:
             return {}
         async with self._session_factory() as session:
-            rows = (
-                await session.execute(
-                    select(
-                        ExerciseTemplate.external_id,
-                        ExerciseTemplate.primary_muscle_group,
-                    ).where(ExerciseTemplate.external_id.in_(external_ids))
+            rows = list(
+                await session.scalars(
+                    select(ExerciseTemplate)
+                    .where(ExerciseTemplate.external_id.in_(external_ids))
+                    .options(selectinload(ExerciseTemplate.secondary_muscles))
                 )
-            ).all()
-        return {external_id: muscle_group for external_id, muscle_group in rows}
+            )
+        return {
+            row.external_id: (
+                row.primary_muscle_group,
+                tuple(item.muscle_group for item in row.secondary_muscles),
+            )
+            for row in rows
+        }
 
 
 def _to_coach_proposal(data: TrainingPlanProposalInput) -> CoachProposalOutput:
@@ -1218,15 +1320,41 @@ def _aggregate_proposed_exercises(
     return result, unmatched
 
 
+@dataclass(frozen=True, slots=True)
+class _MuscleStimulus:
+    direct: int
+    indirect: Decimal
+
+    @property
+    def total(self) -> Decimal:
+        return Decimal(self.direct) + self.indirect
+
+
+_EMPTY_STIMULUS = _MuscleStimulus(0, Decimal(0))
+
+
 def _aggregate_muscle_sets(
-    exercises: dict[str, _ExerciseAggregate], muscle_groups: dict[str, str]
-) -> dict[str, int]:
-    result: dict[str, int] = {}
+    exercises: dict[str, _ExerciseAggregate],
+    muscle_groups: dict[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, _MuscleStimulus]:
+    direct: dict[str, int] = {}
+    indirect: dict[str, Decimal] = {}
     for template_id, exercise in exercises.items():
-        muscle_group = muscle_groups.get(template_id)
-        if muscle_group is not None:
-            result[muscle_group] = result.get(muscle_group, 0) + exercise.sets
-    return result
+        groups = muscle_groups.get(template_id)
+        if groups is None:
+            continue
+        primary, secondary = groups
+        direct[primary] = direct.get(primary, 0) + exercise.sets
+        for muscle_group in secondary:
+            indirect[muscle_group] = indirect.get(muscle_group, Decimal(0)) + (
+                Decimal(exercise.sets) * Decimal("0.5")
+            )
+    return {
+        muscle_group: _MuscleStimulus(
+            direct.get(muscle_group, 0), indirect.get(muscle_group, Decimal(0))
+        )
+        for muscle_group in set(direct) | set(indirect)
+    }
 
 
 def _stable_hash(payload: object) -> str:
