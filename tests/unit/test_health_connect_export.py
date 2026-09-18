@@ -114,6 +114,7 @@ def _export(tmp_path: Path, *, version: int = 26) -> Path:
                 (1, "com.sec.android.app.shealth"),
                 (2, "com.google.android.apps.fitness"),
                 (3, "com.health.openscale.sync"),
+                (4, "com.health.openscale.sync.oss"),
             ],
         )
         connection.executemany(
@@ -159,6 +160,7 @@ def _export(tmp_path: Path, *, version: int = 26) -> Path:
             [
                 (1, uuid4().bytes, 3, day, measured_at, 80_000),
                 (2, uuid4().bytes, 2, day, measured_at, 300_000),
+                (3, uuid4().bytes, 4, day, measured_at + 60_000, 81_000),
             ],
         )
         connection.execute(
@@ -210,7 +212,7 @@ def test_export_parser_filters_samsung_and_aggregates_recent_days(tmp_path: Path
     assert batch.days[0].mean_oxygen_saturation_percent == 97
     assert batch.days[0].vo2_max_ml_min_kg == Decimal("41.8")
     assert batch.days[0].source == "health_connect_samsung"
-    assert len(batch.body_measurements) == 1
+    assert len(batch.body_measurements) == 2
     measurement = batch.body_measurements[0]
     assert measurement.weight_kg == 80
     assert measurement.body_fat_percent == Decimal("18.5")
@@ -220,6 +222,8 @@ def test_export_parser_filters_samsung_and_aggregates_recent_days(tmp_path: Path
     assert measurement.bone_mass_kg == Decimal("3.2")
     assert measurement.basal_metabolic_rate_kcal.quantize(Decimal("0.01")) == Decimal("1652.01")
     assert measurement.source == "health_connect_openscale"
+    assert batch.body_measurements[1].weight_kg == 81
+    assert batch.body_measurements[1].source == "health_connect_openscale"
 
 
 def test_export_parser_rejects_unknown_schema_version(tmp_path: Path) -> None:

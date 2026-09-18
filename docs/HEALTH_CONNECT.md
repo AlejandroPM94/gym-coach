@@ -23,8 +23,8 @@ se trasladan las mismas variables y credenciales; la configuración del teléfon
   512 MiB descomprimidos y una razón de compresión máxima de 50 para evitar archivos abusivos.
 - Para actividad y recuperación solo se leen registros cuyo paquete de origen sea Samsung Health
   (`com.sec.android.app.shealth`). Para peso y grasa BIA solo se admite openScale sync
-  (`com.health.openscale.sync`). Google Fit y las demás aplicaciones quedan excluidas para evitar
-  duplicados; cada tipo mantiene su procedencia.
+  (`com.health.openscale.sync` y `com.health.openscale.sync.oss`). Google Fit y las demás
+  aplicaciones quedan excluidas para evitar duplicados; cada tipo mantiene su procedencia.
 - Los registros históricos de talla, peso y BMR escritos por Samsung no sustituyen el perfil
   confirmado ni los pesajes de openScale: suelen ser copias derivadas y crearían doble procedencia.
 - Se normalizan por fecha local pasos; sesiones y fases de sueño; sesiones y tipos de ejercicio;

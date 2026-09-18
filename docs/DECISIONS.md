@@ -570,3 +570,11 @@
   el resto de BIA, pulso, oxígeno y VO2 son señales de tendencia con procedencia, sin diagnóstico.
 - **Consecuencia:** la revisión semanal recibe una vista compacta y auditable sin cargar al modelo con
   decenas de miles de muestras ni duplicar entrenamientos de fuerza ya detallados por Hevy.
+
+## 2026-09-18 — Paquetes openScale en la exportación de Health Connect
+
+- La revisión real del ZIP contiene pesajes con origen `com.health.openscale.sync.oss`, además del
+  paquete `com.health.openscale.sync` previsto inicialmente. Se aceptan ambos como openScale y se
+  mantiene el filtro de procedencia para excluir otras aplicaciones.
+- La versión del contrato importador sube a 4 para releer una vez la revisión de Drive que antes
+  había importado actividad sin pesajes. La escritura conserva la auditoría y las claves idempotentes.

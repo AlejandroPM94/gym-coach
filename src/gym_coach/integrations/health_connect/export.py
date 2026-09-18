@@ -17,7 +17,7 @@ from gym_coach.tracking.body import BodyMeasurementObservation
 
 DATABASE_NAME = "health_connect_export.db"
 SAMSUNG_HEALTH_PACKAGE = "com.sec.android.app.shealth"
-OPENSCALE_SYNC_PACKAGE = "com.health.openscale.sync"
+OPENSCALE_SYNC_PACKAGES = ("com.health.openscale.sync", "com.health.openscale.sync.oss")
 SUPPORTED_USER_VERSIONS = frozenset({26})
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_DATABASE_BYTES = 512 * 1024 * 1024
@@ -123,8 +123,8 @@ def _read_database(
         openscale_ids = tuple(
             int(row[0])
             for row in connection.execute(
-                "SELECT row_id FROM application_info_table WHERE package_name = ?",
-                (OPENSCALE_SYNC_PACKAGE,),
+                "SELECT row_id FROM application_info_table WHERE package_name IN (?, ?)",
+                OPENSCALE_SYNC_PACKAGES,
             )
         )
         try:

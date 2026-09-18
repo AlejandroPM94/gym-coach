@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Actualizado: 2026-09-15
+Actualizado: 2026-09-18
 
 ## Seguimiento conjunto y Samsung Health mediante Drive
 
@@ -32,8 +32,7 @@ Actualizado: 2026-09-15
   mediante systemd terminó con `Result=success` y dejó programada la siguiente comprobación.
 - El receptor LAN, certificados y APK propios se retiraron; no se abre ningún puerto en el equipo.
 - El ZIP real ampliado produjo 30 días: 27 con pasos, 24 con fases de sueño, 19 con ejercicio,
-  30 con pulso y 24 con oxígeno. La revisión se reimportó tras aplicar la migración; el ZIP aún
-  no contiene openScale, por lo que falta validar el primer registro matutino real.
+  30 con pulso y 24 con oxígeno. La revisión se reimportó tras aplicar la migración.
 - Alembic está en `c31e6c1124ab`. La sincronización real posterior dejó 565 registros sin cambios,
   capturó 8 versiones actuales y enlazará sesiones futuras; no atribuyó esas versiones a los 94
   entrenamientos previos porque sus fechas no lo permiten.
@@ -45,6 +44,10 @@ Actualizado: 2026-09-15
   en `127.0.0.1:5432`; Ollama, si se activa, también queda limitado a loopback.
 - Activación y límites en `docs/HEALTH_CONNECT.md`; matriz conversacional pendiente en
   `docs/COACHING_ACCEPTANCE.md`.
+- El ZIP de Drive del 18 de septiembre contenía dos pesajes openScale con paquete
+  `com.health.openscale.sync.oss`; el filtro anterior solo admitía el paquete sin `.oss`.
+  Se aceptan ambas variantes y la revisión se reimportó: PostgreSQL contiene los pesajes
+  del 16 y 17 de septiembre, junto con los 30 días de actividad.
 
 ## Hito nutricional
 

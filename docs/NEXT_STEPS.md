@@ -43,6 +43,9 @@ También debe probarse `sync_hevy` desde Hermes cuando una sincronización poste
 
 ## Tareas ordenadas
 
+El importador de Health Connect ya cargó los pesajes openScale del 16 y 17 de septiembre.
+Comprobar en una conversación real que Hermes muestra el peso más reciente con fecha y fuente.
+
 1. Validar en Hermes una entrevista por bloques con una confirmación por bloque.
 2. Generar y comparar una rutina con al menos una superserie.
 3. Crear y mapear los Topics restantes de nutrición, objetivos y alertas.

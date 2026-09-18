@@ -12,7 +12,7 @@ from gym_coach.integrations.health_connect.export import parse_health_connect_ex
 from gym_coach.integrations.health_connect.service import HealthConnectService
 from gym_coach.persistence.models import TrackingRecord
 
-IMPORT_CONTRACT_VERSION = 3
+IMPORT_CONTRACT_VERSION = 4
 
 
 class DriveReader(Protocol):
